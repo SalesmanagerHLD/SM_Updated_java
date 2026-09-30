@@ -1,6 +1,6 @@
 # SalesManager CRM — Backend API
 
-Spring Boot REST API for SalesManager CRM. Repository: `SalesmanagerHLD/SM_Updated_java`. Consumed by the web app (`SM_Updated_React`) and the Flutter app (`SM_Updated_Mobile`).
+Spring Boot REST API for SalesManager CRM. Repository: [SalesmanagerHLD/SM_Updated_java](https://github.com/SalesmanagerHLD/SM_Updated_java). Consumed by the web app ([SM_Updated_React](https://github.com/SalesmanagerHLD/SM_Updated_React)) and the Flutter app ([SM_Updated_Mobile](https://github.com/SalesmanagerHLD/SM_Updated_Mobile)).
 
 ## Stack
 
@@ -47,4 +47,14 @@ Runs as the `salesmanager-backend` systemd service on AWS EC2 behind nginx. Depl
 
 ## Documentation
 
-Functional and architectural documentation lives in the project `docs/` folder: `CRM_IMPLEMENTATION.md` (what is built), `EMPLOYEE_ENTITLEMENT_PLAN.md` (Leave/entitlement design) and `SalesManager_CRM_Modules_and_Workflows.md` (modules and workflows).
+Project-wide documentation lives in this repo's [docs/](docs/) folder:
+
+- [CRM_IMPLEMENTATION.md](docs/CRM_IMPLEMENTATION.md) — what is built, architecture, deployment
+- [EMPLOYEE_ENTITLEMENT_PLAN.md](docs/EMPLOYEE_ENTITLEMENT_PLAN.md) — Leave and entitlement design
+- [SalesManager_CRM_Modules_and_Workflows.md](docs/SalesManager_CRM_Modules_and_Workflows.md) — modules and workflows
+- [Mobile app mockup review.pdf](docs/Mobile%20app%20mockup%20review.pdf) — mobile mockup review
+
+## Related repositories
+
+- [SM_Updated_React](https://github.com/SalesmanagerHLD/SM_Updated_React) — web frontend
+- [SM_Updated_Mobile](https://github.com/SalesmanagerHLD/SM_Updated_Mobile) — Flutter mobile app
