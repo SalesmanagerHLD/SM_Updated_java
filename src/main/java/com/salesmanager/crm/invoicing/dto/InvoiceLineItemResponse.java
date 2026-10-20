@@ -18,6 +18,8 @@ public record InvoiceLineItemResponse(
         BigDecimal lineTaxAmount,
         BigDecimal lineCgstAmount,
         BigDecimal lineSgstAmount,
+        BigDecimal lineIgstAmount,
+        String unit,
         int sortOrder) {
 
     public static InvoiceLineItemResponse from(InvoiceLineItem item) {
@@ -35,6 +37,8 @@ public record InvoiceLineItemResponse(
                 item.getLineTaxAmount(),
                 item.getLineCgstAmount(),
                 item.getLineSgstAmount(),
+                item.getLineIgstAmount(),
+                item.getUnit(),
                 item.getSortOrder());
     }
 }

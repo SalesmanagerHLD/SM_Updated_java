@@ -52,6 +52,7 @@ public record QuotationResponse(
         BigDecimal taxableAmount,
         BigDecimal cgstTotal,
         BigDecimal sgstTotal,
+        BigDecimal igstTotal,
         BigDecimal grandTotal,
         QuotationStatus status,
         UUID convertedInvoiceId,
@@ -70,7 +71,7 @@ public record QuotationResponse(
                 q.getQuotationDate(), q.getValidTillDate(), q.getReferenceEnquiryNo(), q.getExpectedCloseDate(),
                 q.getQuotationNotes(), q.getTermsAndConditions(), q.getInternalNote(),
                 q.getFollowUpDate(), q.getFollowUpTime(), q.getFollowUpByEmployeeId(), q.getFollowUpNote(),
-                q.getSubtotal(), q.getDiscountTotal(), q.getTaxableAmount(), q.getCgstTotal(), q.getSgstTotal(),
+                q.getSubtotal(), q.getDiscountTotal(), q.getTaxableAmount(), q.getCgstTotal(), q.getSgstTotal(), q.getIgstTotal(),
                 q.getGrandTotal(), q.getStatus(), q.getConvertedInvoiceId(),
                 lineItems.stream().map(QuotationLineItemResponse::from).toList(),
                 q.getCreatedAt(), q.getUpdatedAt());

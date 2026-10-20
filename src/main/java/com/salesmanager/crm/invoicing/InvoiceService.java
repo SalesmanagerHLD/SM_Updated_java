@@ -1,6 +1,9 @@
 package com.salesmanager.crm.invoicing;
 
 import com.salesmanager.crm.common.NotFoundException;
+import com.salesmanager.crm.invoicing.design.InvoiceDesignSettings;
+import com.salesmanager.crm.customer.Customer;
+import com.salesmanager.crm.customer.CustomerService;
 import com.salesmanager.crm.employee.EmployeeHierarchyService;
 import com.salesmanager.crm.employee.Role;
 import com.salesmanager.crm.inventory.InsufficientStockException;
@@ -10,13 +13,20 @@ import com.salesmanager.crm.inventory.StockMovementReason;
 import com.salesmanager.crm.invoicing.dto.InvoiceCreateRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceLineItemRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceStatusUpdateRequest;
+import com.salesmanager.crm.invoicing.dto.PaymentRequest;
 import com.salesmanager.crm.quotation.Quotation;
 import com.salesmanager.crm.quotation.QuotationLineItem;
 import com.salesmanager.crm.security.CurrentUser;
 import com.salesmanager.crm.security.UserPrincipal;
+import com.salesmanager.crm.tenant.Organization;
+import com.salesmanager.crm.tenant.OrganizationRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,8 +42,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Invoice is create-only in v1 - no edit/delete/void endpoint exists (see Invoice's class
- * javadoc), so there is deliberately no "reverse the stock deduction" compensating logic here.
+ * An issued invoice is never edited or deleted. The only things that change afterwards are
+ * payments recorded against it (insert-only ledger) and cancellation, which reverses the stock
+ * deduction - see {@link #cancel}.
  *
  * <p><b>Why {@link #create} validates ALL catalog lines BEFORE writing anything (critical)</b>:
  * TenantFilter wraps the WHOLE HTTP request in one shared transaction, and in this codebase's
@@ -74,6 +85,12 @@ public class InvoiceService {
     private final CurrentUser currentUser;
     private final BillingProfileService billingProfileService;
     private final InvoicePdfService invoicePdfService;
+    private final InvoicePaymentRepository paymentRepository;
+    private final OrganizationRepository organizationRepository;
+    private final CustomerService customerService;
+    private final Clock billingClock;
+    private final InvoiceDesignService invoiceDesignService;
+    private final InvoiceLogoSnapshotRepository logoSnapshotRepository;
 
     public InvoiceService(InvoiceRepository invoiceRepository,
                            InvoiceLineItemRepository invoiceLineItemRepository,
@@ -82,7 +99,13 @@ public class InvoiceService {
                            EmployeeHierarchyService employeeHierarchyService,
                            CurrentUser currentUser,
                            BillingProfileService billingProfileService,
-                           InvoicePdfService invoicePdfService) {
+                           InvoicePdfService invoicePdfService,
+                           InvoicePaymentRepository paymentRepository,
+                           OrganizationRepository organizationRepository,
+                           CustomerService customerService,
+                           Clock billingClock,
+                           InvoiceDesignService invoiceDesignService,
+                           InvoiceLogoSnapshotRepository logoSnapshotRepository) {
         this.invoiceRepository = invoiceRepository;
         this.invoiceLineItemRepository = invoiceLineItemRepository;
         this.invoiceNumberService = invoiceNumberService;
@@ -91,46 +114,48 @@ public class InvoiceService {
         this.currentUser = currentUser;
         this.billingProfileService = billingProfileService;
         this.invoicePdfService = invoicePdfService;
+        this.paymentRepository = paymentRepository;
+        this.organizationRepository = organizationRepository;
+        this.customerService = customerService;
+        this.billingClock = billingClock;
+        this.invoiceDesignService = invoiceDesignService;
+        this.logoSnapshotRepository = logoSnapshotRepository;
     }
 
     // noRollbackFor must cover every exception Phase 1 can throw, not just whichever inner
     // method actually throws it - EVERY @Transactional method the exception propagates THROUGH
     // gets its own chance (via its own rollback rules) to mark the shared transaction
     // rollback-only, and create() is the last such boundary before the controller. Safe here
-    // because all three are only ever thrown before Phase 2 writes anything - see this class's
+    // because all of them are only ever thrown before Phase 2 writes anything - see this class's
     // javadoc.
     @Transactional(noRollbackFor = {InvalidInvoiceLineItemException.class, NotFoundException.class,
-            InsufficientStockException.class})
+            InsufficientStockException.class, BillingProfileIncompleteException.class})
     public Invoice create(InvoiceCreateRequest request) {
         UserPrincipal principal = currentUser.get();
         UUID actingEmployeeId = principal.getEmployeeId();
 
-        // Phase 1 (read-only): structural validation first (no DB access), then aggregate
-        // requested quantity per distinct catalog product, then lock + confirm each is active
-        // and has enough stock IN ASCENDING-ID ORDER - one locked read per distinct product,
-        // reused below for BOTH the stock check and the price/name snapshot, so there is no
-        // separate unlocked read that could see a different price than what the lock confirmed.
-        // Locks are held continuously (same transaction) through to Phase 2's deduction below,
-        // so nothing can invalidate what was just checked here - see this class's javadoc.
+        // Phase 1 (read-only): structural validation first (no DB access), then who-supplies-
+        // where (tax type), then aggregate requested quantity per distinct catalog product and
+        // lock + confirm each is active and has enough stock IN ASCENDING-ID ORDER.
         List<RawLine> rawLines = validateLineItemShapes(request.lineItems());
+        Organization seller = loadOrganization(principal.getOrganizationId());
+        Customer customer = request.customerId() != null ? customerService.getById(request.customerId()) : null;
+        UUID supplyStateId = request.placeOfSupplyStateId() != null ? request.placeOfSupplyStateId()
+                : (customer != null ? customer.getStateId() : null);
+        boolean interState = determineInterState(seller, supplyStateId);
+
         Map<UUID, BigDecimal> quantityByProductId = aggregateQuantityByProduct(rawLines);
-        Map<UUID, Product> lockedProducts = new HashMap<>();
-        for (UUID productId : quantityByProductId.keySet()) {
-            Product locked = productService.lockAndCheckStock(productId,
-                    quantityByProductId.get(productId).intValueExact());
-            lockedProducts.put(productId, locked);
-        }
-        List<ResolvedLine> resolvedLines = resolveLines(rawLines, lockedProducts);
+        Map<UUID, Product> lockedProducts = lockProducts(quantityByProductId);
+        List<ResolvedLine> resolvedLines = resolveLines(rawLines, lockedProducts, interState);
 
         // Phase 2 (writes): everything from here on should not legitimately fail.
         Totals totals = sumTotals(resolvedLines);
-
-        String invoiceNumber = invoiceNumberService.allocateNext(
-                principal.getOrganizationId(), request.invoiceDate().getYear());
+        String invoiceNumber = invoiceNumberService.allocateNext(principal.getOrganizationId(), request.invoiceDate());
 
         Invoice invoice = Invoice.builder()
                 .invoiceNumber(invoiceNumber)
                 .leadId(request.leadId())
+                .customerId(request.customerId())
                 .ownerId(actingEmployeeId)
                 .createdBy(actingEmployeeId)
                 .customerName(request.customerName())
@@ -145,62 +170,54 @@ public class InvoiceService {
                 .invoiceDate(request.invoiceDate())
                 .dueDate(request.dueDate())
                 .placeOfSupply(request.placeOfSupply())
+                .placeOfSupplyStateId(supplyStateId != null ? supplyStateId : seller.getBillingStateId())
                 .reverseCharge(request.reverseCharge())
-                .subtotal(totals.subtotal)
-                .taxTotal(totals.taxTotal)
-                .grandTotal(totals.grandTotal)
                 .status(InvoiceStatus.UNPAID)
                 .notes(request.notes())
                 .build();
-        Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
-        saveLineItems(savedInvoice.getId(), resolvedLines);
-
-        // Same ascending-id order as the Phase 1 validation loop above - the lock-ordering
-        // discipline applies here too, even though these calls should no longer be able to fail.
-        for (Map.Entry<UUID, BigDecimal> entry : quantityByProductId.entrySet()) {
-            int quantity = entry.getValue().intValueExact();
-            productService.applyStockChange(entry.getKey(), -quantity, StockMovementReason.INVOICE,
-                    savedInvoice.getId(), "Invoice " + savedInvoice.getInvoiceNumber(), actingEmployeeId);
-        }
-
-        return savedInvoice;
+        applyTotals(invoice, totals);
+        invoice.snapshotSellerFrom(seller);
+        return persistInvoice(invoice, resolvedLines, quantityByProductId, actingEmployeeId);
     }
 
     /**
      * Builds a real Invoice from an already-APPROVED/SENT Quotation - called only by
-     * quotation.QuotationService#convertToInvoice, sharing this class's exact lock-ordering/
-     * two-phase validate-then-write discipline (see this class's javadoc) since converting is
-     * the genuine stock-out event a Quotation itself never triggers. Every field is a FRESH
-     * snapshot taken from the Quotation's current line items at conversion time - not a live
-     * reference - same "keeps its own copy from this point on" discipline used everywhere else
-     * in this codebase.
+     * quotation.QuotationService#convertToInvoice (which has already row-locked the quotation),
+     * sharing this class's lock-ordering/two-phase validate-then-write discipline since converting
+     * is the genuine stock-out event a Quotation itself never triggers.
+     *
+     * <p>Price, discount and tax rate are COPIED from the approved quotation's lines - never
+     * re-read from the live Product - so the customer is invoiced exactly what they approved.
+     * Products are locked only for the stock check/deduction. The invoice date is "today" in the
+     * billing time zone (not the JVM's UTC), and the number comes from that date's financial year.
      */
     @Transactional(noRollbackFor = {InvalidInvoiceLineItemException.class, NotFoundException.class,
-            InsufficientStockException.class})
+            InsufficientStockException.class, BillingProfileIncompleteException.class})
     public Invoice createFromQuotation(Quotation quotation, List<QuotationLineItem> quotationLineItems) {
         UUID actingEmployeeId = currentUser.get().getEmployeeId();
 
         List<RawLine> rawLines = new ArrayList<>();
         for (QuotationLineItem item : quotationLineItems) {
-            rawLines.add(new RawLine(item.getProductId(), item.getHsnSac(), item.getDescription(), item.getQuantity(),
-                    item.getUnitPrice(), item.getDiscountPercent(), item.getTaxRatePercent()));
+            rawLines.add(new RawLine(item.getProductId(), item.getHsnSac(), item.getDescription(), item.getUnit(),
+                    item.getQuantity(), item.getUnitPrice(), item.getDiscountPercent(), item.getTaxRatePercent(),
+                    true));
         }
+        Organization seller = loadOrganization(quotation.getOrganizationId());
+        UUID supplyStateId = quotation.getStateId();
+        boolean interState = determineInterState(seller, supplyStateId);
+
         Map<UUID, BigDecimal> quantityByProductId = aggregateQuantityByProduct(rawLines);
-        Map<UUID, Product> lockedProducts = new HashMap<>();
-        for (UUID productId : quantityByProductId.keySet()) {
-            Product locked = productService.lockAndCheckStock(productId,
-                    quantityByProductId.get(productId).intValueExact());
-            lockedProducts.put(productId, locked);
-        }
-        List<ResolvedLine> resolvedLines = resolveLines(rawLines, lockedProducts);
+        Map<UUID, Product> lockedProducts = lockProducts(quantityByProductId);
+        List<ResolvedLine> resolvedLines = resolveLines(rawLines, lockedProducts, interState);
         Totals totals = sumTotals(resolvedLines);
 
-        String invoiceNumber = invoiceNumberService.allocateNext(
-                quotation.getOrganizationId(), quotation.getQuotationDate().getYear());
+        LocalDate invoiceDate = LocalDate.now(billingClock);
+        String invoiceNumber = invoiceNumberService.allocateNext(quotation.getOrganizationId(), invoiceDate);
 
         Invoice invoice = Invoice.builder()
                 .invoiceNumber(invoiceNumber)
                 .leadId(quotation.getLeadId())
+                .customerId(quotation.getCustomerId())
                 .ownerId(quotation.getOwnerId())
                 .createdBy(actingEmployeeId)
                 .customerName(quotation.getCustomerName())
@@ -212,25 +229,80 @@ public class InvoiceService {
                 .shipToName(quotation.getCustomerName())
                 .shipToAddress(quotation.getCustomerBillingAddress())
                 .shipToGstin(quotation.getCustomerGstin())
-                .invoiceDate(java.time.LocalDate.now())
-                .dueDate(java.time.LocalDate.now().plusDays(15))
+                .invoiceDate(invoiceDate)
+                .dueDate(invoiceDate.plusDays(15))
+                .placeOfSupplyStateId(supplyStateId != null ? supplyStateId : seller.getBillingStateId())
                 .quotationId(quotation.getId())
-                .subtotal(totals.subtotal)
-                .taxTotal(totals.taxTotal)
-                .grandTotal(totals.grandTotal)
                 .status(InvoiceStatus.UNPAID)
                 .notes(quotation.getQuotationNotes())
                 .build();
+        applyTotals(invoice, totals);
+        invoice.snapshotSellerFrom(seller);
+        return persistInvoice(invoice, resolvedLines, quantityByProductId, actingEmployeeId);
+    }
+
+    private Invoice persistInvoice(Invoice invoice, List<ResolvedLine> resolvedLines,
+                                    Map<UUID, BigDecimal> quantityByProductId, UUID actingEmployeeId) {
+        // The invoice keeps the design and logo in force right now, so editing either later
+        // never changes this invoice's PDF.
+        invoice.setDesignSettings(invoiceDesignService.currentInvoiceSettingsJson());
         Invoice savedInvoice = invoiceRepository.saveAndFlush(invoice);
         saveLineItems(savedInvoice.getId(), resolvedLines);
+        billingProfileService.getLogoBytes().ifPresent(logo ->
+                logoSnapshotRepository.save(InvoiceLogoSnapshot.builder()
+                        .invoiceId(savedInvoice.getId())
+                        .image(logo.bytes())
+                        .contentType(logo.contentType())
+                        .build()));
 
+        // Same ascending-id order as the Phase 1 validation loop - the lock-ordering discipline
+        // applies here too, even though these calls should no longer be able to fail.
         for (Map.Entry<UUID, BigDecimal> entry : quantityByProductId.entrySet()) {
             int quantity = entry.getValue().intValueExact();
             productService.applyStockChange(entry.getKey(), -quantity, StockMovementReason.INVOICE,
                     savedInvoice.getId(), "Invoice " + savedInvoice.getInvoiceNumber(), actingEmployeeId);
         }
-
         return savedInvoice;
+    }
+
+    private Map<UUID, Product> lockProducts(Map<UUID, BigDecimal> quantityByProductId) {
+        Map<UUID, Product> lockedProducts = new HashMap<>();
+        for (Map.Entry<UUID, BigDecimal> entry : quantityByProductId.entrySet()) {
+            lockedProducts.put(entry.getKey(),
+                    productService.lockAndCheckStock(entry.getKey(), entry.getValue().intValueExact()));
+        }
+        return lockedProducts;
+    }
+
+    private Organization loadOrganization(UUID organizationId) {
+        return organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new NotFoundException("Organization not found: " + organizationId));
+    }
+
+    /** Tax type = seller state vs place-of-supply state. When the buyer's state is unknown the
+     * place of supply defaults to the seller's own state (intra-state). When it IS known but the
+     * seller's isn't, the tax type can't be determined - reject rather than guess. */
+    private boolean determineInterState(Organization seller, UUID supplyStateId) {
+        if (supplyStateId == null) {
+            return false;
+        }
+        if (seller.getBillingStateId() == null) {
+            throw new BillingProfileIncompleteException(
+                    "Set your state in the billing profile before invoicing a customer with a known state - "
+                            + "it decides whether CGST+SGST or IGST applies");
+        }
+        return GstCalculator.isInterState(seller.getBillingStateId(), supplyStateId);
+    }
+
+    private void applyTotals(Invoice invoice, Totals totals) {
+        invoice.setSubtotal(totals.subtotal);
+        invoice.setDiscountTotal(totals.discountTotal);
+        invoice.setTaxableAmount(totals.taxableAmount);
+        invoice.setCgstTotal(totals.cgstTotal);
+        invoice.setSgstTotal(totals.sgstTotal);
+        invoice.setIgstTotal(totals.igstTotal);
+        invoice.setTaxTotal(totals.taxTotal);
+        invoice.setGrandTotal(totals.grandTotal);
     }
 
     private void saveLineItems(UUID invoiceId, List<ResolvedLine> resolvedLines) {
@@ -247,37 +319,43 @@ public class InvoiceService {
                     .taxRatePercent(line.taxRatePercent)
                     .lineSubtotal(line.lineSubtotal)
                     .lineDiscountAmount(line.lineDiscountAmount)
-                    .lineTaxAmount(line.lineCgstAmount.add(line.lineSgstAmount))
+                    .unit(line.unit)
+                    .lineTaxAmount(line.lineCgstAmount.add(line.lineSgstAmount).add(line.lineIgstAmount))
                     .lineCgstAmount(line.lineCgstAmount)
                     .lineSgstAmount(line.lineSgstAmount)
+                    .lineIgstAmount(line.lineIgstAmount)
                     .sortOrder(sortOrder++)
                     .build();
             invoiceLineItemRepository.saveAndFlush(lineItem);
         }
     }
 
-    private Totals sumTotals(List<ResolvedLine> resolvedLines) {
+    private Totals sumTotals(List<ResolvedLine> lines) {
         BigDecimal subtotal = BigDecimal.ZERO;
-        BigDecimal taxTotal = BigDecimal.ZERO;
-        for (ResolvedLine line : resolvedLines) {
+        BigDecimal discount = BigDecimal.ZERO;
+        BigDecimal cgst = BigDecimal.ZERO;
+        BigDecimal sgst = BigDecimal.ZERO;
+        BigDecimal igst = BigDecimal.ZERO;
+        for (ResolvedLine line : lines) {
             subtotal = subtotal.add(line.lineSubtotal);
-            taxTotal = taxTotal.add(line.lineCgstAmount).add(line.lineSgstAmount);
+            discount = discount.add(line.lineDiscountAmount);
+            cgst = cgst.add(line.lineCgstAmount);
+            sgst = sgst.add(line.lineSgstAmount);
+            igst = igst.add(line.lineIgstAmount);
         }
         subtotal = round(subtotal);
-        taxTotal = round(taxTotal);
-        BigDecimal grandTotal = round(subtotal.subtract(sumDiscount(resolvedLines)).add(taxTotal));
-        return new Totals(subtotal, taxTotal, grandTotal);
+        discount = round(discount);
+        BigDecimal taxable = round(subtotal.subtract(discount));
+        cgst = round(cgst);
+        sgst = round(sgst);
+        igst = round(igst);
+        BigDecimal taxTotal = round(cgst.add(sgst).add(igst));
+        return new Totals(subtotal, discount, taxable, cgst, sgst, igst, taxTotal, round(taxable.add(taxTotal)));
     }
 
-    private BigDecimal sumDiscount(List<ResolvedLine> resolvedLines) {
-        BigDecimal discountTotal = BigDecimal.ZERO;
-        for (ResolvedLine line : resolvedLines) {
-            discountTotal = discountTotal.add(line.lineDiscountAmount);
-        }
-        return round(discountTotal);
-    }
-
-    private record Totals(BigDecimal subtotal, BigDecimal taxTotal, BigDecimal grandTotal) {
+    private record Totals(BigDecimal subtotal, BigDecimal discountTotal, BigDecimal taxableAmount,
+                           BigDecimal cgstTotal, BigDecimal sgstTotal, BigDecimal igstTotal,
+                           BigDecimal taxTotal, BigDecimal grandTotal) {
     }
 
     /** Sums requested quantity per distinct product (referenced by more than one line means one
@@ -293,21 +371,21 @@ public class InvoiceService {
         return quantityByProductId;
     }
 
-    /** A line item after structural validation only - a catalog line at this point carries just
-     * its productId + quantity, NOT yet a price/name snapshot (that comes from the single
-     * locked read in {@link #create}'s Phase 1, via {@link #resolveLines}). */
-    private record RawLine(UUID productId, String hsnSac, String description, BigDecimal quantity,
-                            BigDecimal unitPrice, BigDecimal discountPercent, BigDecimal taxRatePercent) {
+    /** A line item after structural validation only. A catalog line from a direct-create request
+     * carries just its productId + quantity (price/name come from the locked Product);
+     * {@code fromSnapshot} lines (converted quotations) carry their own already-approved
+     * price/tax/description and use productId only for the stock check. */
+    private record RawLine(UUID productId, String hsnSac, String description, String unit, BigDecimal quantity,
+                            BigDecimal unitPrice, BigDecimal discountPercent, BigDecimal taxRatePercent,
+                            boolean fromSnapshot) {
     }
 
-    /** One resolved, snapshot-ready line - either derived from the Phase 1 locked Product read
-     * (catalog line) or taken as-is from the request (ad-hoc line). CGST/SGST are the line's tax
-     * split in half (intra-state assumption, no IGST modeled in v1 - see Quotation's identical
-     * convention). */
-    private record ResolvedLine(UUID productId, String hsnSac, String description, BigDecimal quantity,
-                                 BigDecimal unitPrice, BigDecimal discountPercent, BigDecimal taxRatePercent,
-                                 BigDecimal lineSubtotal, BigDecimal lineDiscountAmount,
-                                 BigDecimal lineCgstAmount, BigDecimal lineSgstAmount) {
+    /** One resolved, snapshot-ready line. Tax is split by {@link GstCalculator}: CGST+SGST for an
+     * intra-state supply, IGST for inter-state. */
+    private record ResolvedLine(UUID productId, String hsnSac, String description, String unit,
+                                 BigDecimal quantity, BigDecimal unitPrice, BigDecimal discountPercent,
+                                 BigDecimal taxRatePercent, BigDecimal lineSubtotal, BigDecimal lineDiscountAmount,
+                                 BigDecimal lineCgstAmount, BigDecimal lineSgstAmount, BigDecimal lineIgstAmount) {
     }
 
     /** Mutual exclusivity (exactly one of productId/description) and whole-number-quantity (for
@@ -327,34 +405,34 @@ public class InvoiceService {
                         "quantity must be a whole number for a catalog product line");
             }
             rawLines.add(new RawLine(lineRequest.productId(), lineRequest.hsnSac(), lineRequest.description(),
-                    lineRequest.quantity(), lineRequest.unitPrice(), lineRequest.discountPercent(),
-                    lineRequest.taxRatePercent()));
+                    lineRequest.unit(), lineRequest.quantity(), lineRequest.unitPrice(),
+                    lineRequest.discountPercent(), lineRequest.taxRatePercent(), false));
         }
         return rawLines;
     }
 
-    /** Turns each structurally-valid raw line into a fully snapshot-ready ResolvedLine - a
-     * catalog line's name/price/tax come from the ALREADY-LOCKED Product read in Phase 1
-     * (never a separate, potentially-stale unlocked read), an ad-hoc line uses its own request
-     * values directly. */
-    private List<ResolvedLine> resolveLines(List<RawLine> rawLines, Map<UUID, Product> lockedProducts) {
+    /** Turns each structurally-valid raw line into a fully snapshot-ready ResolvedLine. */
+    private List<ResolvedLine> resolveLines(List<RawLine> rawLines, Map<UUID, Product> lockedProducts,
+                                             boolean interState) {
         List<ResolvedLine> resolved = new ArrayList<>();
         for (RawLine line : rawLines) {
             String hsnSac;
             String description;
+            String unit;
             BigDecimal unitPrice;
             BigDecimal taxRatePercent;
-            UUID productId = null;
-            if (line.productId != null) {
+            UUID productId = line.productId;
+            if (line.productId != null && !line.fromSnapshot) {
                 Product product = lockedProducts.get(line.productId);
-                productId = product.getId();
                 hsnSac = product.getHsnSacCode();
                 description = product.getName();
+                unit = product.getUnitOfMeasure();
                 unitPrice = product.getUnitPrice();
                 taxRatePercent = product.getTaxRatePercent();
             } else {
                 hsnSac = line.hsnSac;
                 description = line.description;
+                unit = line.unit;
                 unitPrice = line.unitPrice != null ? line.unitPrice : BigDecimal.ZERO;
                 taxRatePercent = line.taxRatePercent != null ? line.taxRatePercent : BigDecimal.ZERO;
             }
@@ -364,13 +442,11 @@ public class InvoiceService {
             BigDecimal lineDiscountAmount = round(lineSubtotal.multiply(discountPercent)
                     .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP));
             BigDecimal lineTaxableAmount = lineSubtotal.subtract(lineDiscountAmount);
-            BigDecimal halfTaxRate = taxRatePercent.divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
-            BigDecimal lineCgstAmount = round(lineTaxableAmount.multiply(halfTaxRate)
-                    .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP));
-            BigDecimal lineSgstAmount = lineCgstAmount;
+            GstCalculator.Split tax = GstCalculator.split(lineTaxableAmount, taxRatePercent, interState);
 
-            resolved.add(new ResolvedLine(productId, hsnSac, description, line.quantity, unitPrice, discountPercent,
-                    taxRatePercent, lineSubtotal, lineDiscountAmount, lineCgstAmount, lineSgstAmount));
+            resolved.add(new ResolvedLine(productId, hsnSac, description, unit, line.quantity, unitPrice,
+                    discountPercent, taxRatePercent, lineSubtotal, lineDiscountAmount,
+                    tax.cgst(), tax.sgst(), tax.igst()));
         }
         return resolved;
     }
@@ -418,28 +494,195 @@ public class InvoiceService {
         return invoiceLineItemRepository.findByInvoiceIdOrderBySortOrderAsc(invoiceId);
     }
 
+    /** Batch form for list pages - one query for every invoice on the page. */
+    @Transactional(readOnly = true)
+    public Map<UUID, List<InvoiceLineItem>> getLineItemsByInvoiceIds(Collection<UUID> invoiceIds) {
+        Map<UUID, List<InvoiceLineItem>> byInvoice = new HashMap<>();
+        if (invoiceIds.isEmpty()) {
+            return byInvoice;
+        }
+        for (InvoiceLineItem item : invoiceLineItemRepository.findByInvoiceIdInOrderBySortOrderAsc(invoiceIds)) {
+            byInvoice.computeIfAbsent(item.getInvoiceId(), k -> new ArrayList<>()).add(item);
+        }
+        return byInvoice;
+    }
+
+    @Transactional(readOnly = true)
+    public BigDecimal getAmountPaid(UUID invoiceId) {
+        return paymentRepository.sumAmountByInvoiceId(invoiceId);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<UUID, BigDecimal> getAmountPaidByInvoiceIds(Collection<UUID> invoiceIds) {
+        Map<UUID, BigDecimal> paid = new HashMap<>();
+        if (invoiceIds.isEmpty()) {
+            return paid;
+        }
+        for (Object[] row : paymentRepository.sumAmountByInvoiceIds(invoiceIds)) {
+            paid.put((UUID) row[0], (BigDecimal) row[1]);
+        }
+        return paid;
+    }
+
+    /** Same visibility scoping as {@link #getById}. */
+    @Transactional(readOnly = true, noRollbackFor = NotFoundException.class)
+    public List<InvoicePayment> getPayments(UUID invoiceId) {
+        loadForCurrentUser(invoiceId, true);
+        return paymentRepository.findByInvoiceIdOrderByPaymentDateAscCreatedAtAsc(invoiceId);
+    }
+
     /** Same visibility scoping as {@link #getById} (via loadForCurrentUser) - a colleague's
      * invoice can't be downloaded any more than it can be viewed. */
     @Transactional(readOnly = true, noRollbackFor = NotFoundException.class)
     public byte[] renderInvoicePdf(UUID id) {
         Invoice invoice = loadForCurrentUser(id, true);
         List<InvoiceLineItem> lineItems = getLineItems(id);
-        String logoDataUri = billingProfileService.getLogoDataUri().orElse(null);
-        return invoicePdfService.renderPdf(invoice, lineItems, billingProfileService.getBillingProfile(), logoDataUri);
+        // Snapshot logo first; invoices issued before snapshots existed fall back to the live logo.
+        String logoDataUri = logoSnapshotRepository.findByInvoiceId(id)
+                .map(snap -> toDataUri(snap.getContentType(), snap.getImage()))
+                .or(() -> billingProfileService.getLogoDataUri())
+                .orElse(null);
+        InvoiceDesignSettings design = invoiceDesignService.parseOrDefault(invoice.getDesignSettings());
+        return invoicePdfService.renderPdf(invoice, lineItems, paymentRepository.sumAmountByInvoiceId(id),
+                logoDataUri, design);
     }
 
-    /** TEAM_VISIBILITY is a READ-only grant here too, same rule as Lead - a manager can see but
-     * not mark a subordinate's invoice paid through this feature alone. */
-    @Transactional(noRollbackFor = NotFoundException.class)
-    public Invoice updateStatus(UUID id, InvoiceStatusUpdateRequest request) {
-        Invoice invoice = loadForCurrentUser(id, false);
-        invoice.setStatus(request.status());
+    /**
+     * Renders UNSAVED design settings to a PDF for the Invoice design page's live preview -
+     * against a real invoice when invoiceId is given (same visibility rules as downloading it),
+     * otherwise a made-up sample. Stores nothing.
+     */
+    @Transactional(readOnly = true)
+    public byte[] renderDesignPreviewPdf(InvoiceDesignSettings design, UUID invoiceId) {
+        String logoDataUri = billingProfileService.getLogoDataUri().orElse(null);
+        if (invoiceId != null) {
+            Invoice invoice = loadForCurrentUser(invoiceId, true);
+            return invoicePdfService.renderPdf(invoice, getLineItems(invoiceId),
+                    paymentRepository.sumAmountByInvoiceId(invoiceId), logoDataUri, design);
+        }
+        Invoice sample = InvoiceDesignSample.invoice(billingProfileService.getBillingProfile());
+        return invoicePdfService.renderPdf(sample, InvoiceDesignSample.lines(), BigDecimal.ZERO, logoDataUri, design);
+    }
+
+    private static String toDataUri(String contentType, byte[] bytes) {
+        return "data:" + contentType + ";base64," + java.util.Base64.getEncoder().encodeToString(bytes);
+    }
+
+    /**
+     * Records one payment against an invoice (one row per payment mode) and re-derives the
+     * invoice status from the ledger: nothing paid -> UNPAID, some -> PARTIALLY_PAID, all -> PAID.
+     * The invoice row is locked first so two concurrent payments can't together overpay it.
+     * TEAM_VISIBILITY is a READ-only grant here too, same rule as Lead.
+     */
+    @Transactional(noRollbackFor = {NotFoundException.class, InvalidInvoiceStateException.class})
+    public Invoice recordPayment(UUID id, PaymentRequest request) {
+        Invoice invoice = loadForCurrentUserForUpdate(id);
+        if (invoice.getStatus() == InvoiceStatus.CANCELLED) {
+            throw new InvalidInvoiceStateException("A cancelled invoice cannot receive payments");
+        }
+        BigDecimal alreadyPaid = paymentRepository.sumAmountByInvoiceId(id);
+        BigDecimal balance = invoice.getGrandTotal().subtract(alreadyPaid);
+        BigDecimal amount = round(request.amount());
+        if (amount.compareTo(balance) > 0) {
+            throw new InvalidInvoiceStateException(
+                    "Payment of " + amount + " exceeds the balance due of " + balance);
+        }
+        paymentRepository.saveAndFlush(InvoicePayment.builder()
+                .invoiceId(id)
+                .amount(amount)
+                .mode(request.mode())
+                .paymentDate(request.paymentDate() != null ? request.paymentDate() : LocalDate.now(billingClock))
+                .reference(request.reference())
+                .notes(request.notes())
+                .recordedBy(currentUser.get().getEmployeeId())
+                .build());
+        return refreshStatus(invoice, alreadyPaid.add(amount));
+    }
+
+    /**
+     * Cancels an invoice (never deletes it): status -> CANCELLED with a reason, and every catalog
+     * line's stock is returned (ascending product-id order, same lock discipline as creation).
+     * An invoice that already has payments can't be cancelled here - the money would be
+     * stranded in the ledger; that needs the credit-note/refund flow.
+     */
+    @Transactional(noRollbackFor = {NotFoundException.class, InvalidInvoiceStateException.class})
+    public Invoice cancel(UUID id, String reason) {
+        Invoice invoice = loadForCurrentUserForUpdate(id);
+        if (invoice.getStatus() == InvoiceStatus.CANCELLED) {
+            throw new InvalidInvoiceStateException("Invoice is already cancelled");
+        }
+        if (paymentRepository.sumAmountByInvoiceId(id).signum() > 0) {
+            throw new InvalidInvoiceStateException(
+                    "An invoice with recorded payments cannot be cancelled - refund/credit it instead");
+        }
+        UUID actingEmployeeId = currentUser.get().getEmployeeId();
+
+        Map<UUID, BigDecimal> quantityByProductId = new TreeMap<>(Comparator.naturalOrder());
+        for (InvoiceLineItem line : invoiceLineItemRepository.findByInvoiceIdOrderBySortOrderAsc(id)) {
+            if (line.getProductId() != null) {
+                quantityByProductId.merge(line.getProductId(), line.getQuantity(), BigDecimal::add);
+            }
+        }
+        for (Map.Entry<UUID, BigDecimal> entry : quantityByProductId.entrySet()) {
+            productService.applyStockChange(entry.getKey(), entry.getValue().intValueExact(),
+                    StockMovementReason.INVOICE_CANCELLATION, id,
+                    "Cancelled invoice " + invoice.getInvoiceNumber(), actingEmployeeId);
+        }
+
+        invoice.setStatus(InvoiceStatus.CANCELLED);
+        invoice.setCancelledAt(OffsetDateTime.now(billingClock));
+        invoice.setCancelReason(reason);
+        invoice.setCancelledBy(actingEmployeeId);
         return invoiceRepository.saveAndFlush(invoice);
+    }
+
+    /** Legacy endpoint kept for API compatibility: PAID now means "settle the remaining balance
+     * with a payment". Moving back to UNPAID (or setting the other statuses directly) is no
+     * longer possible - the status is derived from payments, and corrections go through cancel. */
+    @Transactional(noRollbackFor = {NotFoundException.class, InvalidInvoiceStateException.class})
+    public Invoice updateStatus(UUID id, InvoiceStatusUpdateRequest request) {
+        if (request.status() != InvoiceStatus.PAID) {
+            throw new InvalidInvoiceStateException(
+                    "Status can only be set to PAID (which records the remaining balance as a payment). "
+                            + "Use the payments and cancel endpoints for anything else");
+        }
+        Invoice invoice = loadForCurrentUserForUpdate(id);
+        if (invoice.getStatus() == InvoiceStatus.CANCELLED) {
+            throw new InvalidInvoiceStateException("A cancelled invoice cannot be marked paid");
+        }
+        BigDecimal balance = invoice.getGrandTotal().subtract(paymentRepository.sumAmountByInvoiceId(id));
+        if (balance.signum() > 0) {
+            return recordPayment(id, new PaymentRequest(balance, PaymentMode.OTHER, null, null, "Marked as paid"));
+        }
+        return refreshStatus(invoice, invoice.getGrandTotal());
+    }
+
+    private Invoice refreshStatus(Invoice invoice, BigDecimal totalPaid) {
+        InvoiceStatus status;
+        if (totalPaid.compareTo(invoice.getGrandTotal()) >= 0 && totalPaid.signum() > 0) {
+            status = InvoiceStatus.PAID;
+        } else if (totalPaid.signum() > 0) {
+            status = InvoiceStatus.PARTIALLY_PAID;
+        } else {
+            status = InvoiceStatus.UNPAID;
+        }
+        invoice.setStatus(status);
+        return invoiceRepository.saveAndFlush(invoice);
+    }
+
+    private Invoice loadForCurrentUserForUpdate(UUID id) {
+        Invoice invoice = invoiceRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new NotFoundException("Invoice not found: " + id));
+        return checkVisibility(invoice, id, false);
     }
 
     private Invoice loadForCurrentUser(UUID id, boolean allowTeamVisibility) {
         Invoice invoice = invoiceRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Invoice not found: " + id));
+        return checkVisibility(invoice, id, allowTeamVisibility);
+    }
+
+    private Invoice checkVisibility(Invoice invoice, UUID id, boolean allowTeamVisibility) {
         UserPrincipal principal = currentUser.get();
         if (principal.getRole() == Role.EMPLOYEE && !invoice.getOwnerId().equals(principal.getEmployeeId())) {
             boolean withinTeamScope = allowTeamVisibility && employeeHierarchyService

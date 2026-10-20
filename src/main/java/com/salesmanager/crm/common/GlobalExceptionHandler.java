@@ -6,7 +6,11 @@ import com.salesmanager.crm.employee.MultipleAdminNotAllowedException;
 import com.salesmanager.crm.entitlement.FeatureNotEntitledException;
 import com.salesmanager.crm.inventory.InsufficientStockException;
 import com.salesmanager.crm.inventory.InvalidStockAdjustmentException;
+import com.salesmanager.crm.invoicing.BillingProfileIncompleteException;
 import com.salesmanager.crm.invoicing.InvalidInvoiceLineItemException;
+import com.salesmanager.crm.invoicing.InvalidInvoiceStateException;
+import com.salesmanager.crm.quotation.InvalidQuotationLineItemException;
+import com.salesmanager.crm.quotation.InvalidQuotationStateException;
 import com.salesmanager.crm.invoicing.InvalidLogoException;
 import com.salesmanager.crm.lead.InvalidLeadStatusException;
 import com.salesmanager.crm.leadattachment.InvalidAttachmentException;
@@ -24,6 +28,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.AuthenticationException;
@@ -336,6 +341,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
+    /** A request body that isn't readable as the target type (malformed JSON, or an enum value
+     * outside its allowed set) is the client's mistake - 400, not the catch-all 500. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex,
+                                                              HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
+                .message("Request body is malformed or contains an unsupported value")
+                .path(request.getRequestURI())
+                .fieldErrors(List.of())
+                .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
                                                              HttpServletRequest request) {
@@ -403,6 +424,62 @@ public class GlobalExceptionHandler {
                 .fieldErrors(List.of())
                 .build();
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
+    }
+
+    @ExceptionHandler(InvalidInvoiceStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidInvoiceState(InvalidInvoiceStateException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error(HttpStatus.CONFLICT.getReasonPhrase())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .fieldErrors(List.of())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(InvalidQuotationStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQuotationState(InvalidQuotationStateException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error(HttpStatus.CONFLICT.getReasonPhrase())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .fieldErrors(List.of())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(BillingProfileIncompleteException.class)
+    public ResponseEntity<ErrorResponse> handleBillingProfileIncomplete(BillingProfileIncompleteException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.UNPROCESSABLE_ENTITY.value())
+                .error(HttpStatus.UNPROCESSABLE_ENTITY.getReasonPhrase())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .fieldErrors(List.of())
+                .build();
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
+    }
+
+    @ExceptionHandler(InvalidQuotationLineItemException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQuotationLineItem(InvalidQuotationLineItemException ex,
+                                                                          HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
+                .message("Validation failed")
+                .path(request.getRequestURI())
+                .fieldErrors(List.of(ErrorResponse.FieldErrorDetail.builder()
+                        .field(ex.getField())
+                        .message(ex.getMessage())
+                        .build()))
+                .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
     @ExceptionHandler(Exception.class)

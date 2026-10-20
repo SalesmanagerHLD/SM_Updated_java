@@ -2,9 +2,14 @@ package com.salesmanager.crm.invoicing;
 
 import com.salesmanager.crm.entitlement.FeatureEntitlement;
 import com.salesmanager.crm.entitlement.RequireEntitlement;
+import com.salesmanager.crm.invoicing.dto.InvoiceCancelRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceCreateRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceResponse;
 import com.salesmanager.crm.invoicing.dto.InvoiceStatusUpdateRequest;
+import com.salesmanager.crm.invoicing.dto.PaymentRequest;
+import com.salesmanager.crm.invoicing.dto.PaymentResponse;
+import java.util.List;
+import java.util.Map;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -27,7 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
  * No ADMIN-only restriction here - any authenticated employee closes and invoices their own
  * deals, same as Lead creation. Visibility (list/getById) is owner-scoped, expanded by
  * TEAM_VISIBILITY exactly like lead.LeadController. Every endpoint requires
- * INVENTORY_MANAGEMENT.
+ * INVOICING.
  */
 @RestController
 @RequestMapping("/invoices")
@@ -40,41 +45,70 @@ public class InvoiceController {
     }
 
     @GetMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public Page<InvoiceResponse> list(@RequestParam(required = false) InvoiceStatus status,
                                        @RequestParam(required = false) UUID ownerId,
                                        Pageable pageable) {
         InvoiceFilter filter = new InvoiceFilter(status, ownerId);
-        return invoiceService.list(filter, pageable)
-                .map(invoice -> InvoiceResponse.from(invoice, invoiceService.getLineItems(invoice.getId())));
+        Page<Invoice> page = invoiceService.list(filter, pageable);
+        // Batch-load lines and payment totals for the whole page (2 queries, not 2 per invoice).
+        List<UUID> ids = page.getContent().stream().map(Invoice::getId).toList();
+        Map<UUID, List<InvoiceLineItem>> lines = invoiceService.getLineItemsByInvoiceIds(ids);
+        Map<UUID, java.math.BigDecimal> paid = invoiceService.getAmountPaidByInvoiceIds(ids);
+        return page.map(invoice -> InvoiceResponse.from(invoice,
+                lines.getOrDefault(invoice.getId(), List.of()), paid.get(invoice.getId())));
     }
 
     @GetMapping("/{id}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public InvoiceResponse getById(@PathVariable UUID id) {
         Invoice invoice = invoiceService.getById(id);
-        return InvoiceResponse.from(invoice, invoiceService.getLineItems(id));
+        return toResponse(invoice);
     }
 
     @PostMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     @ResponseStatus(HttpStatus.CREATED)
     public InvoiceResponse create(@Valid @RequestBody InvoiceCreateRequest request) {
         Invoice invoice = invoiceService.create(request);
-        return InvoiceResponse.from(invoice, invoiceService.getLineItems(invoice.getId()));
+        return toResponse(invoice);
+    }
+
+    @PostMapping("/{id}/payments")
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
+    @ResponseStatus(HttpStatus.CREATED)
+    public InvoiceResponse recordPayment(@PathVariable UUID id, @Valid @RequestBody PaymentRequest request) {
+        return toResponse(invoiceService.recordPayment(id, request));
+    }
+
+    @GetMapping("/{id}/payments")
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
+    public List<PaymentResponse> listPayments(@PathVariable UUID id) {
+        return invoiceService.getPayments(id).stream().map(PaymentResponse::from).toList();
+    }
+
+    @PostMapping("/{id}/cancel")
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
+    public InvoiceResponse cancel(@PathVariable UUID id, @Valid @RequestBody InvoiceCancelRequest request) {
+        return toResponse(invoiceService.cancel(id, request.reason()));
+    }
+
+    private InvoiceResponse toResponse(Invoice invoice) {
+        return InvoiceResponse.from(invoice, invoiceService.getLineItems(invoice.getId()),
+                invoiceService.getAmountPaid(invoice.getId()));
     }
 
     @PatchMapping("/{id}/status")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public InvoiceResponse updateStatus(@PathVariable UUID id, @Valid @RequestBody InvoiceStatusUpdateRequest request) {
         Invoice invoice = invoiceService.updateStatus(id, request);
-        return InvoiceResponse.from(invoice, invoiceService.getLineItems(id));
+        return toResponse(invoice);
     }
 
     /** First binary-download endpoint in this codebase - plain ResponseEntity<byte[]>, nothing
      * exotic needed. */
     @GetMapping("/{id}/pdf")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public ResponseEntity<byte[]> downloadPdf(@PathVariable UUID id) {
         Invoice invoice = invoiceService.getById(id);
         byte[] pdfBytes = invoiceService.renderInvoicePdf(id);

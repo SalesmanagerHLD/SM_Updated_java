@@ -1,5 +1,6 @@
 package com.salesmanager.crm.invoicing.dto;
 
+import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -29,8 +30,12 @@ public record InvoiceLineItemRequest(
         BigDecimal unitPrice,
 
         @DecimalMin(value = "0.0", message = "discountPercent must not be negative")
+        @DecimalMax(value = "100.0", message = "discountPercent must not exceed 100")
         BigDecimal discountPercent,
 
         @DecimalMin(value = "0.0", message = "taxRatePercent must not be negative")
-        BigDecimal taxRatePercent) {
+        BigDecimal taxRatePercent,
+
+        @Size(max = 20, message = "unit must be at most 20 characters")
+        String unit) {
 }

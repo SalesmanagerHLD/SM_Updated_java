@@ -8,8 +8,10 @@ import com.salesmanager.crm.employee.Role;
 import com.salesmanager.crm.inventory.Product;
 import com.salesmanager.crm.inventory.ProductService;
 import com.salesmanager.crm.invoicing.BillingProfileService;
+import com.salesmanager.crm.invoicing.GstCalculator;
 import com.salesmanager.crm.invoicing.Invoice;
 import com.salesmanager.crm.invoicing.InvoiceService;
+import com.salesmanager.crm.lead.LeadService;
 import com.salesmanager.crm.masterdata.MasterDataService;
 import com.salesmanager.crm.masterdata.MasterType;
 import com.salesmanager.crm.quotation.dto.QuotationCreateRequest;
@@ -17,6 +19,7 @@ import com.salesmanager.crm.quotation.dto.QuotationLineItemRequest;
 import com.salesmanager.crm.quotation.dto.QuotationStatusUpdateRequest;
 import com.salesmanager.crm.security.CurrentUser;
 import com.salesmanager.crm.security.UserPrincipal;
+import com.salesmanager.crm.tenant.OrganizationRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -57,6 +60,8 @@ public class QuotationService {
     private final BillingProfileService billingProfileService;
     private final QuotationPdfService quotationPdfService;
     private final CurrentUser currentUser;
+    private final OrganizationRepository organizationRepository;
+    private final LeadService leadService;
 
     public QuotationService(QuotationRepository quotationRepository,
                              QuotationLineItemRepository quotationLineItemRepository,
@@ -69,7 +74,11 @@ public class QuotationService {
                              QuotationAttachmentRepository quotationAttachmentRepository,
                              BillingProfileService billingProfileService,
                              QuotationPdfService quotationPdfService,
-                             CurrentUser currentUser) {
+                             CurrentUser currentUser,
+                             OrganizationRepository organizationRepository,
+                             LeadService leadService) {
+        this.organizationRepository = organizationRepository;
+        this.leadService = leadService;
         this.quotationRepository = quotationRepository;
         this.quotationLineItemRepository = quotationLineItemRepository;
         this.quotationNumberService = quotationNumberService;
@@ -94,7 +103,7 @@ public class QuotationService {
         Customer customer = customerService.getById(request.customerId());
         validateReferences(request);
 
-        List<ResolvedLine> resolvedLines = resolveLines(request.lineItems());
+        List<ResolvedLine> resolvedLines = resolveLines(request.lineItems(), isInterState(request.stateId()));
         Totals totals = sumTotals(resolvedLines);
 
         String quotationNumber = quotationNumberService.allocateNext(
@@ -139,6 +148,7 @@ public class QuotationService {
                 .taxableAmount(totals.taxableAmount)
                 .cgstTotal(totals.cgstTotal)
                 .sgstTotal(totals.sgstTotal)
+                .igstTotal(totals.igstTotal)
                 .grandTotal(totals.grandTotal)
                 .status(request.status())
                 .createdBy(principal.getEmployeeId())
@@ -162,7 +172,7 @@ public class QuotationService {
         Customer customer = customerService.getById(request.customerId());
         validateReferences(request);
 
-        List<ResolvedLine> resolvedLines = resolveLines(request.lineItems());
+        List<ResolvedLine> resolvedLines = resolveLines(request.lineItems(), isInterState(request.stateId()));
         Totals totals = sumTotals(resolvedLines);
 
         quotation.setLeadId(request.leadId());
@@ -201,6 +211,7 @@ public class QuotationService {
         quotation.setTaxableAmount(totals.taxableAmount);
         quotation.setCgstTotal(totals.cgstTotal);
         quotation.setSgstTotal(totals.sgstTotal);
+        quotation.setIgstTotal(totals.igstTotal);
         quotation.setGrandTotal(totals.grandTotal);
         quotation.setStatus(request.status());
         Quotation saved = quotationRepository.saveAndFlush(quotation);
@@ -228,6 +239,7 @@ public class QuotationService {
                     .lineTaxableAmount(line.lineTaxableAmount)
                     .lineCgstAmount(line.lineCgstAmount)
                     .lineSgstAmount(line.lineSgstAmount)
+                    .lineIgstAmount(line.lineIgstAmount)
                     .lineTotal(line.lineTotal)
                     .sortOrder(sortOrder++)
                     .build();
@@ -250,7 +262,15 @@ public class QuotationService {
 
     /** Structural validation + snapshot resolution in one pass - no stock lock (Quotation never
      * deducts stock, see this class's javadoc), so a simple read-only Product lookup suffices. */
-    private List<ResolvedLine> resolveLines(List<QuotationLineItemRequest> requests) {
+    /** IGST applies when the buyer's state is known and differs from the seller's billing-profile
+     * state; with either unknown it stays CGST+SGST (a quotation isn't the legal tax document). */
+    private boolean isInterState(java.util.UUID supplyStateId) {
+        java.util.UUID sellerStateId = organizationRepository.findById(currentUser.get().getOrganizationId())
+                .map(o -> o.getBillingStateId()).orElse(null);
+        return GstCalculator.isInterState(sellerStateId, supplyStateId);
+    }
+
+    private List<ResolvedLine> resolveLines(List<QuotationLineItemRequest> requests, boolean interState) {
         List<ResolvedLine> resolved = new ArrayList<>();
         for (QuotationLineItemRequest lineRequest : requests) {
             boolean hasProduct = lineRequest.productId() != null;
@@ -294,15 +314,15 @@ public class QuotationService {
             BigDecimal lineDiscountAmount = round(lineSubtotal.multiply(discountPercent)
                     .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP));
             BigDecimal lineTaxableAmount = round(lineSubtotal.subtract(lineDiscountAmount));
-            BigDecimal halfTaxRate = taxRatePercent.divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
-            BigDecimal lineCgstAmount = round(lineTaxableAmount.multiply(halfTaxRate)
-                    .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP));
-            BigDecimal lineSgstAmount = lineCgstAmount;
-            BigDecimal lineTotal = round(lineTaxableAmount.add(lineCgstAmount).add(lineSgstAmount));
+            GstCalculator.Split tax = GstCalculator.split(lineTaxableAmount, taxRatePercent, interState);
+            BigDecimal lineCgstAmount = tax.cgst();
+            BigDecimal lineSgstAmount = tax.sgst();
+            BigDecimal lineIgstAmount = tax.igst();
+            BigDecimal lineTotal = round(lineTaxableAmount.add(tax.total()));
 
             resolved.add(new ResolvedLine(productId, hsnSac, description, quantity, unitOfMeasure, unitPrice,
                     discountPercent, taxRatePercent, lineSubtotal, lineDiscountAmount, lineTaxableAmount,
-                    lineCgstAmount, lineSgstAmount, lineTotal));
+                    lineCgstAmount, lineSgstAmount, lineIgstAmount, lineTotal));
         }
         return resolved;
     }
@@ -313,6 +333,7 @@ public class QuotationService {
         BigDecimal taxableAmount = BigDecimal.ZERO;
         BigDecimal cgstTotal = BigDecimal.ZERO;
         BigDecimal sgstTotal = BigDecimal.ZERO;
+        BigDecimal igstTotal = BigDecimal.ZERO;
         BigDecimal grandTotal = BigDecimal.ZERO;
         for (ResolvedLine line : lines) {
             subtotal = subtotal.add(line.lineSubtotal);
@@ -320,10 +341,11 @@ public class QuotationService {
             taxableAmount = taxableAmount.add(line.lineTaxableAmount);
             cgstTotal = cgstTotal.add(line.lineCgstAmount);
             sgstTotal = sgstTotal.add(line.lineSgstAmount);
+            igstTotal = igstTotal.add(line.lineIgstAmount);
             grandTotal = grandTotal.add(line.lineTotal);
         }
         return new Totals(round(subtotal), round(discountTotal), round(taxableAmount), round(cgstTotal),
-                round(sgstTotal), round(grandTotal));
+                round(sgstTotal), round(igstTotal), round(grandTotal));
     }
 
     private static BigDecimal round(BigDecimal value) {
@@ -334,11 +356,12 @@ public class QuotationService {
                                  String unit, BigDecimal unitPrice, BigDecimal discountPercent,
                                  BigDecimal taxRatePercent, BigDecimal lineSubtotal, BigDecimal lineDiscountAmount,
                                  BigDecimal lineTaxableAmount, BigDecimal lineCgstAmount, BigDecimal lineSgstAmount,
-                                 BigDecimal lineTotal) {
+                                 BigDecimal lineIgstAmount, BigDecimal lineTotal) {
     }
 
     private record Totals(BigDecimal subtotal, BigDecimal discountTotal, BigDecimal taxableAmount,
-                           BigDecimal cgstTotal, BigDecimal sgstTotal, BigDecimal grandTotal) {
+                           BigDecimal cgstTotal, BigDecimal sgstTotal, BigDecimal igstTotal,
+                           BigDecimal grandTotal) {
     }
 
     @Transactional(readOnly = true)
@@ -416,9 +439,19 @@ public class QuotationService {
      * SAME transaction as invoicing.InvoiceService#createFromQuotation's writes (both share the
      * request-wide transaction TenantFilter already opens), so a failure partway through can
      * never leave a Quotation marked CONVERTED without a real Invoice behind it. */
-    @Transactional(noRollbackFor = {NotFoundException.class, InvalidQuotationStateException.class})
+    // The invoice-side exceptions are all thrown by InvoiceService's read-only validation phase,
+    // BEFORE anything is written - so letting the shared request transaction commit is safe, and
+    // without them here the 4xx response was cut off by an UnexpectedRollbackException at commit.
+    @Transactional(noRollbackFor = {NotFoundException.class, InvalidQuotationStateException.class,
+            com.salesmanager.crm.inventory.InsufficientStockException.class,
+            com.salesmanager.crm.invoicing.InvalidInvoiceLineItemException.class,
+            com.salesmanager.crm.invoicing.BillingProfileIncompleteException.class})
     public Invoice convertToInvoice(UUID id) {
-        Quotation quotation = loadForCurrentUser(id, false);
+        // Row-lock first: two concurrent clicks serialize here, and the second one then sees
+        // CONVERTED and is rejected - instead of both creating an invoice and deducting stock.
+        Quotation quotation = quotationRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new NotFoundException("Quotation not found: " + id));
+        checkVisibility(quotation, id, false);
         if (quotation.getStatus() != QuotationStatus.SENT && quotation.getStatus() != QuotationStatus.APPROVED) {
             throw new InvalidQuotationStateException(
                     "Only a SENT or APPROVED quotation can be converted to an invoice - current status is "
@@ -429,12 +462,22 @@ public class QuotationService {
         quotation.setStatus(QuotationStatus.CONVERTED);
         quotation.setConvertedInvoiceId(invoice.getId());
         quotationRepository.saveAndFlush(quotation);
+        // Same transaction as the invoice: a won deal marks its lead CLOSED_WON, but only where
+        // the lead's own status rules already allow it (see LeadService#markClosedWonIfAllowed).
+        // An invoice created directly with a leadId (no quotation) deliberately does NOT do this.
+        if (quotation.getLeadId() != null) {
+            leadService.markClosedWonIfAllowed(quotation.getLeadId());
+        }
         return invoice;
     }
 
     private Quotation loadForCurrentUser(UUID id, boolean allowTeamVisibility) {
         Quotation quotation = quotationRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("Quotation not found: " + id));
+        return checkVisibility(quotation, id, allowTeamVisibility);
+    }
+
+    private Quotation checkVisibility(Quotation quotation, UUID id, boolean allowTeamVisibility) {
         UserPrincipal principal = currentUser.get();
         if (principal.getRole() == Role.EMPLOYEE && !quotation.getOwnerId().equals(principal.getEmployeeId())) {
             boolean withinTeamScope = allowTeamVisibility && employeeHierarchyService

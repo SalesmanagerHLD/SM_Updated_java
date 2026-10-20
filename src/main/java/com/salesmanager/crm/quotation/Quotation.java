@@ -175,4 +175,8 @@ public class Quotation extends TenantAware {
 
     @Column(name = "created_by", nullable = false, updatable = false)
     private UUID createdBy;
+
+    @Column(name = "igst_total", nullable = false)
+    @Builder.Default
+    private BigDecimal igstTotal = BigDecimal.ZERO;
 }

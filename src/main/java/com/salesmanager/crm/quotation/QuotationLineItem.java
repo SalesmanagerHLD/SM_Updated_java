@@ -7,6 +7,7 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -81,4 +82,8 @@ public class QuotationLineItem extends TenantAware {
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
+
+    @Column(name = "line_igst_amount", nullable = false)
+    @Builder.Default
+    private BigDecimal lineIgstAmount = BigDecimal.ZERO;
 }

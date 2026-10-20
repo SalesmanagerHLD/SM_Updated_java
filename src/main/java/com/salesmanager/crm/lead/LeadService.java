@@ -347,6 +347,42 @@ public class LeadService {
     }
 
     /**
+     * Called when a Quotation tied to this lead is converted to an invoice. Marks the lead
+     * CLOSED_WON through {@link #updateStatus} (so the activity-log entry is written exactly as
+     * for a manual status change) - but ONLY when that existing path would already allow it for
+     * the current user; otherwise the lead is left untouched and {@code false} is returned.
+     * That means no existing rule is bypassed:
+     * <ul>
+     *   <li>a lead that is already LOST or CLOSED_WON is never changed;</li>
+     *   <li>the lead must be Hot (updateStatus's gate on every status other than
+     *       Interested/Lost);</li>
+     *   <li>an EMPLOYEE can only update a lead they own (an ADMIN can update any).</li>
+     * </ul>
+     * Every condition is checked up front without throwing, so nothing here can mark the shared
+     * request transaction rollback-only (or, via updateStatus's noRollbackFor, half-commit)
+     * after the invoice has already been written.
+     */
+    @Transactional
+    public boolean markClosedWonIfAllowed(UUID leadId) {
+        Lead lead = leadRepository.findById(leadId).orElse(null);
+        if (lead == null) {
+            return false;
+        }
+        if (lead.getStatus() == LeadStatus.LOST || lead.getStatus() == LeadStatus.CLOSED_WON) {
+            return false;
+        }
+        UserPrincipal principal = currentUser.get();
+        if (principal.getRole() == Role.EMPLOYEE && !lead.getOwnerId().equals(principal.getEmployeeId())) {
+            return false;
+        }
+        if (!isHotInterestLevel(lead.getInterestLevelId())) {
+            return false;
+        }
+        updateStatus(leadId, new LeadStatusUpdateRequest(LeadStatus.CLOSED_WON, null, null));
+        return true;
+    }
+
+    /**
      * True only when {@code interestLevelId} resolves to the fixed INTEREST_LEVEL/HOT master
      * row - a null id, a deleted/invalid id, or a free-text interestLevelOther (which has no id
      * to resolve at all) are all treated as not-Hot. Drives both create()'s initial status and

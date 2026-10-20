@@ -78,4 +78,11 @@ public class InvoiceLineItem extends TenantAware {
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
+
+    @Column(length = 20)
+    private String unit;
+
+    @Column(name = "line_igst_amount", nullable = false)
+    @Builder.Default
+    private BigDecimal lineIgstAmount = BigDecimal.ZERO;
 }

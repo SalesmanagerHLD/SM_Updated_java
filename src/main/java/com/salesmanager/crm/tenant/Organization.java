@@ -57,6 +57,11 @@ public class Organization extends BaseEntity {
     @Column(name = "billing_phone", length = 50)
     private String billingPhone;
 
+    /** The seller's state (a master_data STATE row) - one side of the CGST+SGST vs IGST decision
+     * (see invoicing.GstCalculator). Null until the admin sets it in the billing profile. */
+    @Column(name = "billing_state_id")
+    private java.util.UUID billingStateId;
+
     /**
      * Optional logo shown at the top of a generated invoice PDF - stored directly as bytea
      * (not S3; see V14 migration comment) since it's a small, rarely-changed, single-row-per-org

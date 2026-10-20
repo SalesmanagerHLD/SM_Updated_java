@@ -20,7 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * GET open to any entitled authenticated user (any employee generating an invoice PDF needs
  * the seller header populated), PUT/logo-upload/logo-delete ADMIN-only - same "generic reads,
- * ADMIN-only mutations" split as theme.ThemeController. Gated by INVENTORY_MANAGEMENT since
+ * ADMIN-only mutations" split as theme.ThemeController. Gated by INVOICING since
  * this only matters when Invoicing is in use.
  */
 @RestController
@@ -33,14 +33,14 @@ public class BillingProfileController {
     }
 
     @GetMapping("/organizations/me/billing-profile")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public BillingProfileResponse getBillingProfile() {
         return billingProfileService.getBillingProfile();
     }
 
     @PutMapping("/organizations/me/billing-profile")
     @PreAuthorize("hasRole('ADMIN')")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public BillingProfileResponse updateBillingProfile(@Valid @RequestBody BillingProfileUpdateRequest request) {
         return billingProfileService.updateBillingProfile(request);
     }
@@ -48,7 +48,7 @@ public class BillingProfileController {
     /** Any entitled user can preview the currently-set logo (needed by the Settings page
      * preview, same visibility as the rest of the billing profile). 404 if none is set. */
     @GetMapping("/organizations/me/logo")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public ResponseEntity<byte[]> getLogo() {
         return billingProfileService.getLogoBytes()
                 .map(logo -> ResponseEntity.ok()
@@ -59,14 +59,14 @@ public class BillingProfileController {
 
     @PutMapping(value = "/organizations/me/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasRole('ADMIN')")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public BillingProfileResponse uploadLogo(@RequestPart("file") MultipartFile file) {
         return billingProfileService.uploadLogo(file);
     }
 
     @DeleteMapping("/organizations/me/logo")
     @PreAuthorize("hasRole('ADMIN')")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public BillingProfileResponse deleteLogo() {
         return billingProfileService.deleteLogo();
     }

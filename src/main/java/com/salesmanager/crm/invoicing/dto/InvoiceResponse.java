@@ -33,13 +33,30 @@ public record InvoiceResponse(
         BigDecimal subtotal,
         BigDecimal taxTotal,
         BigDecimal grandTotal,
+        BigDecimal discountTotal,
+        BigDecimal taxableAmount,
+        BigDecimal cgstTotal,
+        BigDecimal sgstTotal,
+        BigDecimal igstTotal,
+        UUID customerId,
+        UUID placeOfSupplyStateId,
+        String sellerName,
+        String sellerGstin,
+        UUID sellerStateId,
+        BigDecimal amountPaid,
+        BigDecimal balanceDue,
+        OffsetDateTime cancelledAt,
+        String cancelReason,
         InvoiceStatus status,
         String notes,
         List<InvoiceLineItemResponse> lineItems,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
 
-    public static InvoiceResponse from(Invoice invoice, List<InvoiceLineItem> lineItems) {
+    public static InvoiceResponse from(Invoice invoice, List<InvoiceLineItem> lineItems, BigDecimal amountPaid) {
+        BigDecimal paid = amountPaid != null ? amountPaid : BigDecimal.ZERO;
+        BigDecimal balanceDue = invoice.getStatus() == InvoiceStatus.CANCELLED
+                ? BigDecimal.ZERO : invoice.getGrandTotal().subtract(paid);
         return new InvoiceResponse(
                 invoice.getId(),
                 invoice.getOrganizationId(),
@@ -64,6 +81,20 @@ public record InvoiceResponse(
                 invoice.getSubtotal(),
                 invoice.getTaxTotal(),
                 invoice.getGrandTotal(),
+                invoice.getDiscountTotal(),
+                invoice.getTaxableAmount(),
+                invoice.getCgstTotal(),
+                invoice.getSgstTotal(),
+                invoice.getIgstTotal(),
+                invoice.getCustomerId(),
+                invoice.getPlaceOfSupplyStateId(),
+                invoice.getSellerName(),
+                invoice.getSellerGstin(),
+                invoice.getSellerStateId(),
+                paid,
+                balanceDue,
+                invoice.getCancelledAt(),
+                invoice.getCancelReason(),
                 invoice.getStatus(),
                 invoice.getNotes(),
                 lineItems.stream().map(InvoiceLineItemResponse::from).toList(),

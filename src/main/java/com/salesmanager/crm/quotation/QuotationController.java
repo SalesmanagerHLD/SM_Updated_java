@@ -36,7 +36,7 @@ import org.springframework.web.multipart.MultipartFile;
 /**
  * No ADMIN-only restriction - any authenticated employee drafts/sends their own quotations, same
  * as Lead/Invoice creation. Visibility is owner-scoped, expanded by TEAM_VISIBILITY exactly like
- * invoicing.InvoiceController. Every endpoint requires INVENTORY_MANAGEMENT.
+ * invoicing.InvoiceController. Every endpoint requires INVOICING.
  */
 @RestController
 @RequestMapping("/quotations")
@@ -55,7 +55,7 @@ public class QuotationController {
     }
 
     @GetMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public Page<QuotationResponse> list(@RequestParam(required = false) QuotationStatus status,
                                          @RequestParam(required = false) UUID ownerId,
                                          @RequestParam(required = false) UUID customerId,
@@ -72,14 +72,14 @@ public class QuotationController {
     }
 
     @GetMapping("/{id}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public QuotationResponse getById(@PathVariable UUID id) {
         Quotation quotation = quotationService.getById(id);
         return QuotationResponse.from(quotation, quotationService.getLineItems(id));
     }
 
     @PostMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     @ResponseStatus(HttpStatus.CREATED)
     public QuotationResponse create(@Valid @RequestBody QuotationCreateRequest request) {
         Quotation quotation = quotationService.create(request);
@@ -87,14 +87,14 @@ public class QuotationController {
     }
 
     @PutMapping("/{id}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public QuotationResponse update(@PathVariable UUID id, @Valid @RequestBody QuotationCreateRequest request) {
         Quotation quotation = quotationService.update(id, request);
         return QuotationResponse.from(quotation, quotationService.getLineItems(id));
     }
 
     @PatchMapping("/{id}/status")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public QuotationResponse updateStatus(@PathVariable UUID id,
                                            @Valid @RequestBody QuotationStatusUpdateRequest request) {
         Quotation quotation = quotationService.updateStatus(id, request);
@@ -102,14 +102,15 @@ public class QuotationController {
     }
 
     @PostMapping("/{id}/convert-to-invoice")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public InvoiceResponse convertToInvoice(@PathVariable UUID id) {
         Invoice invoice = quotationService.convertToInvoice(id);
-        return InvoiceResponse.from(invoice, invoiceService.getLineItems(invoice.getId()));
+        return InvoiceResponse.from(invoice, invoiceService.getLineItems(invoice.getId()),
+                invoiceService.getAmountPaid(invoice.getId()));
     }
 
     @GetMapping("/{id}/pdf")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public ResponseEntity<byte[]> downloadPdf(@PathVariable UUID id) {
         Quotation quotation = quotationService.getById(id);
         byte[] pdfBytes = quotationService.renderQuotationPdf(id);
@@ -121,7 +122,7 @@ public class QuotationController {
     }
 
     @PostMapping(value = "/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     @ResponseStatus(HttpStatus.CREATED)
     public QuotationAttachmentResponse uploadAttachment(@PathVariable UUID id,
                                                           @RequestPart("file") MultipartFile file) {
@@ -129,13 +130,13 @@ public class QuotationController {
     }
 
     @GetMapping("/{id}/attachments")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public List<QuotationAttachmentResponse> listAttachments(@PathVariable UUID id) {
         return quotationAttachmentService.list(id).stream().map(QuotationAttachmentResponse::from).toList();
     }
 
     @GetMapping("/attachments/{attachmentId}/download")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public ResponseEntity<byte[]> downloadAttachment(@PathVariable UUID attachmentId) {
         QuotationAttachmentService.LoadedAttachment loaded = quotationAttachmentService.download(attachmentId);
         return ResponseEntity.ok()
@@ -146,7 +147,7 @@ public class QuotationController {
     }
 
     @DeleteMapping("/attachments/{attachmentId}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteAttachment(@PathVariable UUID attachmentId) {
         quotationAttachmentService.delete(attachmentId);

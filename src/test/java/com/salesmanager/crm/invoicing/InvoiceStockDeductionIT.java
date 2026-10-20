@@ -146,10 +146,13 @@ class InvoiceStockDeductionIT extends AbstractIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-Platform-Key", platformAdminKey);
-        ResponseEntity<String> response = restTemplate.exchange(
-                baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + CODE,
-                HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // Invoicing has its own entitlement now; these tests also use products, so grant both.
+        for (String code : java.util.List.of(CODE, "INVOICING")) {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + code,
+                    HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        }
     }
 
     private ResponseEntity<String> post(String path, String token, Object body) {

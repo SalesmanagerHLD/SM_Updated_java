@@ -406,10 +406,12 @@ class ReportingIT extends AbstractIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-Platform-Key", platformAdminKey);
-        ResponseEntity<String> response = restTemplate.exchange(
-                baseUrl() + "/internal/organizations/" + orgId + "/entitlements/INVENTORY_MANAGEMENT",
-                HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        for (String code : java.util.List.of("INVENTORY_MANAGEMENT", "INVOICING")) {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + code,
+                    HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        }
     }
 
     private String createLeadWithSource(String token, Masters masters, String companyName, String contactNo,
