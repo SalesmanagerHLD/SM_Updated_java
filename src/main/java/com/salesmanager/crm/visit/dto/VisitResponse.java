@@ -44,6 +44,7 @@ public record VisitResponse(
         VisitStatus status,
         UUID createdBy,
         Set<UUID> productIds,
+        Set<UUID> interestReasonIds,
         String productsOther,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
@@ -79,6 +80,7 @@ public record VisitResponse(
                 visit.getStatus(),
                 visit.getCreatedBy(),
                 visit.getProductIds(),
+                visit.getInterestReasonIds(),
                 visit.getProductsOther(),
                 visit.getCreatedAt(),
                 visit.getUpdatedAt());

@@ -14,6 +14,11 @@ import com.salesmanager.crm.invoicing.dto.InvoiceCreateRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceLineItemRequest;
 import com.salesmanager.crm.invoicing.dto.InvoiceStatusUpdateRequest;
 import com.salesmanager.crm.invoicing.dto.PaymentRequest;
+import com.salesmanager.crm.purchaseorder.InvalidPurchaseOrderStateException;
+import com.salesmanager.crm.purchaseorder.OverBillingException;
+import com.salesmanager.crm.purchaseorder.PurchaseOrder;
+import com.salesmanager.crm.purchaseorder.PurchaseOrderLine;
+import com.salesmanager.crm.purchaseorder.PurchaseOrderService;
 import com.salesmanager.crm.quotation.Quotation;
 import com.salesmanager.crm.quotation.QuotationLineItem;
 import com.salesmanager.crm.security.CurrentUser;
@@ -30,6 +35,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -91,6 +97,7 @@ public class InvoiceService {
     private final Clock billingClock;
     private final InvoiceDesignService invoiceDesignService;
     private final InvoiceLogoSnapshotRepository logoSnapshotRepository;
+    private final PurchaseOrderService purchaseOrderService;
 
     public InvoiceService(InvoiceRepository invoiceRepository,
                            InvoiceLineItemRepository invoiceLineItemRepository,
@@ -105,7 +112,8 @@ public class InvoiceService {
                            CustomerService customerService,
                            Clock billingClock,
                            InvoiceDesignService invoiceDesignService,
-                           InvoiceLogoSnapshotRepository logoSnapshotRepository) {
+                           InvoiceLogoSnapshotRepository logoSnapshotRepository,
+                           PurchaseOrderService purchaseOrderService) {
         this.invoiceRepository = invoiceRepository;
         this.invoiceLineItemRepository = invoiceLineItemRepository;
         this.invoiceNumberService = invoiceNumberService;
@@ -120,6 +128,7 @@ public class InvoiceService {
         this.billingClock = billingClock;
         this.invoiceDesignService = invoiceDesignService;
         this.logoSnapshotRepository = logoSnapshotRepository;
+        this.purchaseOrderService = purchaseOrderService;
     }
 
     // noRollbackFor must cover every exception Phase 1 can throw, not just whichever inner
@@ -129,7 +138,8 @@ public class InvoiceService {
     // because all of them are only ever thrown before Phase 2 writes anything - see this class's
     // javadoc.
     @Transactional(noRollbackFor = {InvalidInvoiceLineItemException.class, NotFoundException.class,
-            InsufficientStockException.class, BillingProfileIncompleteException.class})
+            InsufficientStockException.class, BillingProfileIncompleteException.class,
+            InvalidPurchaseOrderStateException.class, OverBillingException.class})
     public Invoice create(InvoiceCreateRequest request) {
         UserPrincipal principal = currentUser.get();
         UUID actingEmployeeId = principal.getEmployeeId();
@@ -137,11 +147,32 @@ public class InvoiceService {
         // Phase 1 (read-only): structural validation first (no DB access), then who-supplies-
         // where (tax type), then aggregate requested quantity per distinct catalog product and
         // lock + confirm each is active and has enough stock IN ASCENDING-ID ORDER.
-        List<RawLine> rawLines = validateLineItemShapes(request.lineItems());
+        // A PO invoice bills PO lines at the PO's own prices; the PO is row-locked (and its lines)
+        // BEFORE the products, so the lock order is always invoice -> PO -> lines -> products.
+        PurchaseOrder po = null;
+        Map<UUID, PurchaseOrderLine> poLines = null;
+        Map<UUID, BigDecimal> billedByPoLine = new LinkedHashMap<>();
+        boolean overridden = false;
+        List<RawLine> rawLines;
+        if (request.poId() != null) {
+            po = purchaseOrderService.lockForBilling(request.poId(), request.leadId());
+            poLines = purchaseOrderService.lockLines(po.getId());
+            rawLines = buildPoLines(request.lineItems(), poLines, billedByPoLine);
+            overridden = purchaseOrderService.checkWithinRemaining(billedByPoLine, poLines,
+                    request.overBillingReason());
+        } else {
+            for (InvoiceLineItemRequest line : request.lineItems()) {
+                if (line.poLineId() != null) {
+                    throw new InvalidInvoiceLineItemException("poLineId", "poLineId can only be used with a poId");
+                }
+            }
+            rawLines = validateLineItemShapes(request.lineItems());
+        }
         Organization seller = loadOrganization(principal.getOrganizationId());
         Customer customer = request.customerId() != null ? customerService.getById(request.customerId()) : null;
         UUID supplyStateId = request.placeOfSupplyStateId() != null ? request.placeOfSupplyStateId()
-                : (customer != null ? customer.getStateId() : null);
+                : (customer != null ? customer.getStateId()
+                : (po != null ? po.getPlaceOfSupplyStateId() : null));
         boolean interState = determineInterState(seller, supplyStateId);
 
         Map<UUID, BigDecimal> quantityByProductId = aggregateQuantityByProduct(rawLines);
@@ -168,7 +199,13 @@ public class InvoiceService {
                 .shipToAddress(request.shipToAddress())
                 .shipToGstin(request.shipToGstin())
                 .invoiceDate(request.invoiceDate())
-                .dueDate(request.dueDate())
+                .dueDate(request.dueDate() != null ? request.dueDate()
+                        : (po != null && po.getPaymentTermsDays() != null
+                                ? request.invoiceDate().plusDays(po.getPaymentTermsDays()) : null))
+                .poId(po != null ? po.getId() : null)
+                .poNumber(po != null ? po.getPoNumber() : blankToNull(request.poNumber()))
+                .poDate(po != null ? po.getPoDate() : (blankToNull(request.poNumber()) != null ? request.poDate() : null))
+                .poOverrideReason(overridden ? request.overBillingReason().trim() : null)
                 .placeOfSupply(request.placeOfSupply())
                 .placeOfSupplyStateId(supplyStateId != null ? supplyStateId : seller.getBillingStateId())
                 .reverseCharge(request.reverseCharge())
@@ -177,7 +214,43 @@ public class InvoiceService {
                 .build();
         applyTotals(invoice, totals);
         invoice.snapshotSellerFrom(seller);
-        return persistInvoice(invoice, resolvedLines, quantityByProductId, actingEmployeeId);
+        Invoice saved = persistInvoice(invoice, resolvedLines, quantityByProductId, actingEmployeeId);
+        if (po != null) {
+            purchaseOrderService.applyBilling(po, poLines, billedByPoLine, saved,
+                    overridden ? request.overBillingReason().trim() : null);
+        }
+        return saved;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * Turns the request lines of a PO invoice into snapshot lines priced from the PO. Every line
+     * must name a PO line of THIS PO; description, HSN, unit, rate and tax come from the PO line
+     * and only the quantity comes from the request. Pure validation - writes nothing.
+     */
+    private List<RawLine> buildPoLines(List<InvoiceLineItemRequest> requests,
+                                        Map<UUID, PurchaseOrderLine> poLines,
+                                        Map<UUID, BigDecimal> billedByPoLine) {
+        List<RawLine> rawLines = new ArrayList<>();
+        for (InvoiceLineItemRequest lineRequest : requests) {
+            PurchaseOrderLine poLine = lineRequest.poLineId() == null ? null : poLines.get(lineRequest.poLineId());
+            if (poLine == null) {
+                throw new InvalidInvoiceLineItemException("poLineId",
+                        "Every line on a purchase-order invoice must reference a line of that purchase order");
+            }
+            if (poLine.getProductId() != null && lineRequest.quantity().stripTrailingZeros().scale() > 0) {
+                throw new InvalidInvoiceLineItemException("quantity",
+                        "quantity must be a whole number for a catalog product line");
+            }
+            billedByPoLine.merge(poLine.getId(), lineRequest.quantity(), BigDecimal::add);
+            rawLines.add(new RawLine(poLine.getProductId(), poLine.getHsnSac(), poLine.getDescription(),
+                    poLine.getUnit(), lineRequest.quantity(), poLine.getRate(), BigDecimal.ZERO,
+                    poLine.getTaxRatePercent(), true, poLine.getId()));
+        }
+        return rawLines;
     }
 
     /**
@@ -200,7 +273,7 @@ public class InvoiceService {
         for (QuotationLineItem item : quotationLineItems) {
             rawLines.add(new RawLine(item.getProductId(), item.getHsnSac(), item.getDescription(), item.getUnit(),
                     item.getQuantity(), item.getUnitPrice(), item.getDiscountPercent(), item.getTaxRatePercent(),
-                    true));
+                    true, null));
         }
         Organization seller = loadOrganization(quotation.getOrganizationId());
         UUID supplyStateId = quotation.getStateId();
@@ -311,6 +384,7 @@ public class InvoiceService {
             InvoiceLineItem lineItem = InvoiceLineItem.builder()
                     .invoiceId(invoiceId)
                     .productId(line.productId)
+                    .poLineId(line.poLineId)
                     .hsnSac(line.hsnSac)
                     .description(line.description)
                     .quantity(line.quantity)
@@ -377,7 +451,7 @@ public class InvoiceService {
      * price/tax/description and use productId only for the stock check. */
     private record RawLine(UUID productId, String hsnSac, String description, String unit, BigDecimal quantity,
                             BigDecimal unitPrice, BigDecimal discountPercent, BigDecimal taxRatePercent,
-                            boolean fromSnapshot) {
+                            boolean fromSnapshot, UUID poLineId) {
     }
 
     /** One resolved, snapshot-ready line. Tax is split by {@link GstCalculator}: CGST+SGST for an
@@ -385,7 +459,8 @@ public class InvoiceService {
     private record ResolvedLine(UUID productId, String hsnSac, String description, String unit,
                                  BigDecimal quantity, BigDecimal unitPrice, BigDecimal discountPercent,
                                  BigDecimal taxRatePercent, BigDecimal lineSubtotal, BigDecimal lineDiscountAmount,
-                                 BigDecimal lineCgstAmount, BigDecimal lineSgstAmount, BigDecimal lineIgstAmount) {
+                                 BigDecimal lineCgstAmount, BigDecimal lineSgstAmount, BigDecimal lineIgstAmount,
+                                 UUID poLineId) {
     }
 
     /** Mutual exclusivity (exactly one of productId/description) and whole-number-quantity (for
@@ -406,7 +481,7 @@ public class InvoiceService {
             }
             rawLines.add(new RawLine(lineRequest.productId(), lineRequest.hsnSac(), lineRequest.description(),
                     lineRequest.unit(), lineRequest.quantity(), lineRequest.unitPrice(),
-                    lineRequest.discountPercent(), lineRequest.taxRatePercent(), false));
+                    lineRequest.discountPercent(), lineRequest.taxRatePercent(), false, null));
         }
         return rawLines;
     }
@@ -446,7 +521,7 @@ public class InvoiceService {
 
             resolved.add(new ResolvedLine(productId, hsnSac, description, unit, line.quantity, unitPrice,
                     discountPercent, taxRatePercent, lineSubtotal, lineDiscountAmount,
-                    tax.cgst(), tax.sgst(), tax.igst()));
+                    tax.cgst(), tax.sgst(), tax.igst(), line.poLineId));
         }
         return resolved;
     }
@@ -618,7 +693,18 @@ public class InvoiceService {
         UUID actingEmployeeId = currentUser.get().getEmployeeId();
 
         Map<UUID, BigDecimal> quantityByProductId = new TreeMap<>(Comparator.naturalOrder());
-        for (InvoiceLineItem line : invoiceLineItemRepository.findByInvoiceIdOrderBySortOrderAsc(id)) {
+        Map<UUID, BigDecimal> billedByPoLine = new LinkedHashMap<>();
+        List<InvoiceLineItem> cancelledLines = invoiceLineItemRepository.findByInvoiceIdOrderBySortOrderAsc(id);
+        for (InvoiceLineItem line : cancelledLines) {
+            if (line.getPoLineId() != null) {
+                billedByPoLine.merge(line.getPoLineId(), line.getQuantity(), BigDecimal::add);
+            }
+        }
+        // Invoice (locked above) -> PO -> lines -> products, the same order create() takes.
+        if (invoice.getPoId() != null) {
+            purchaseOrderService.restoreBilling(invoice.getPoId(), billedByPoLine, invoice);
+        }
+        for (InvoiceLineItem line : cancelledLines) {
             if (line.getProductId() != null) {
                 quantityByProductId.merge(line.getProductId(), line.getQuantity(), BigDecimal::add);
             }

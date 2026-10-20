@@ -11,5 +11,6 @@ import java.util.UUID;
  * shared, but the two extra date fields are exact-match, not ranges). */
 public record LeadDashboardFilter(LeadStatus status, UUID ownerId, UUID interestLevelId, UUID stateId, UUID cityId,
                                    UUID productId, UUID businessTypeId, LocalDate nextFollowupDate,
-                                   LocalDate expectedCloseDate, LocalDate dateFrom, LocalDate dateTo) {
+                                   LocalDate expectedCloseDate, LocalDate dateFrom, LocalDate dateTo,
+                                   UUID interestReasonId) {
 }

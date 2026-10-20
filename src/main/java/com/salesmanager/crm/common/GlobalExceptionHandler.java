@@ -9,6 +9,9 @@ import com.salesmanager.crm.inventory.InvalidStockAdjustmentException;
 import com.salesmanager.crm.invoicing.BillingProfileIncompleteException;
 import com.salesmanager.crm.invoicing.InvalidInvoiceLineItemException;
 import com.salesmanager.crm.invoicing.InvalidInvoiceStateException;
+import com.salesmanager.crm.purchaseorder.InvalidPurchaseOrderStateException;
+import com.salesmanager.crm.purchaseorder.OverBillingException;
+import com.salesmanager.crm.purchaseorder.PurchaseOrderLineException;
 import com.salesmanager.crm.quotation.InvalidQuotationLineItemException;
 import com.salesmanager.crm.quotation.InvalidQuotationStateException;
 import com.salesmanager.crm.invoicing.InvalidLogoException;
@@ -480,6 +483,58 @@ public class GlobalExceptionHandler {
                         .build()))
                 .build();
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(InvalidPurchaseOrderStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidPurchaseOrderState(InvalidPurchaseOrderStateException ex,
+                                                                           HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error(HttpStatus.CONFLICT.getReasonPhrase())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .fieldErrors(List.of())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(PurchaseOrderLineException.class)
+    public ResponseEntity<ErrorResponse> handlePurchaseOrderLine(PurchaseOrderLineException ex,
+                                                                   HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
+                .message("Validation failed")
+                .path(request.getRequestURI())
+                .fieldErrors(List.of(ErrorResponse.FieldErrorDetail.builder()
+                        .field(ex.getField())
+                        .message(ex.getMessage())
+                        .build()))
+                .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    /** 409. {@code error} is OVER_BILLING_OVERRIDE_REQUIRED when an admin may retry with a reason,
+     * OVER_BILLING otherwise; fieldErrors has one entry per offending PO line (field = poLineId). */
+    @ExceptionHandler(OverBillingException.class)
+    public ResponseEntity<ErrorResponse> handleOverBilling(OverBillingException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(OffsetDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error(ex.isOverridable() ? "OVER_BILLING_OVERRIDE_REQUIRED" : "OVER_BILLING")
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .fieldErrors(ex.getViolations().stream()
+                        .map(v -> ErrorResponse.FieldErrorDetail.builder()
+                                .field(String.valueOf(v.poLineId()))
+                                .message(v.description() + ": requested " + v.requested().toPlainString()
+                                        + ", remaining " + v.remaining().toPlainString())
+                                .build())
+                        .toList())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
 
     @ExceptionHandler(Exception.class)

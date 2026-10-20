@@ -7,6 +7,7 @@ import java.util.UUID;
 public record InvoiceLineItemResponse(
         UUID id,
         UUID productId,
+        UUID poLineId,
         String hsnSac,
         String description,
         BigDecimal quantity,
@@ -26,6 +27,7 @@ public record InvoiceLineItemResponse(
         return new InvoiceLineItemResponse(
                 item.getId(),
                 item.getProductId(),
+                item.getPoLineId(),
                 item.getHsnSac(),
                 item.getDescription(),
                 item.getQuantity(),

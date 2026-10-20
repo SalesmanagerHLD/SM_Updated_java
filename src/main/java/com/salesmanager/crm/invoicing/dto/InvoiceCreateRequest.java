@@ -71,5 +71,19 @@ public record InvoiceCreateRequest(
         List<InvoiceLineItemRequest> lineItems,
 
         @Size(max = 2000, message = "notes must be at most 2000 characters")
-        String notes) {
+        String notes,
+
+        /** Bills this customer purchase order: every line must then carry a poLineId, and the PO
+         * number/date are copied from the PO. */
+        UUID poId,
+
+        /** For an invoice with NO poId: the customer's PO reference, typed in. Ignored when poId is set. */
+        @Size(max = 100, message = "poNumber must be at most 100 characters")
+        String poNumber,
+
+        LocalDate poDate,
+
+        /** ADMIN only: required to bill past a PO line's remaining quantity. */
+        @Size(max = 500, message = "overBillingReason must be at most 500 characters")
+        String overBillingReason) {
 }

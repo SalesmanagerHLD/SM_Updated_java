@@ -96,6 +96,7 @@ public class LeadService {
                 request.cityId(), request.cityOther(),
                 request.interestLevelId(), request.interestLevelOther(),
                 request.productIds());
+        masterDataService.validateInterestReasons(request.interestReasonIds(), request.interestLevelId());
         // industryId/leadSourceId/cityId used to be @NotNull on the DTO; now that each has a
         // free-text fallback, "required" generalizes to "one of the pair must be supplied".
         requireProvided(request.industryId(), request.industryOther(), "industryId");
@@ -136,6 +137,8 @@ public class LeadService {
                 .ownerId(currentEmployeeId)
                 .createdBy(currentEmployeeId)
                 .productIds(new HashSet<>(request.productIds() != null ? request.productIds() : Set.of()))
+                .interestReasonIds(new HashSet<>(
+                        request.interestReasonIds() != null ? request.interestReasonIds() : Set.of()))
                 .productsOther(request.productsOther())
                 .build();
         // saveAndFlush - see EmployeeService#create's comment re: @CreationTimestamp/@UpdateTimestamp.
@@ -170,6 +173,7 @@ public class LeadService {
         // Captured BEFORE applying request.nextFollowupDate() below, so the "changed to a
         // new, non-null value" comparison never fires on an unrelated resave with the same date.
         LocalDate oldNextFollowupDate = lead.getNextFollowupDate();
+        UUID oldInterestLevelId = lead.getInterestLevelId();
 
         applyCreatableField(request.industryId(), request.industryOther(), MasterType.INDUSTRY,
                 "industryId", "industryOther", null, lead::setIndustryId, lead::setIndustryOther);
@@ -193,6 +197,8 @@ public class LeadService {
             }
             lead.setProductIds(new HashSet<>(request.productIds()));
         }
+        applyInterestReasons(lead, request.interestReasonIds(),
+                !java.util.Objects.equals(oldInterestLevelId, lead.getInterestLevelId()));
         if (request.productsOther() != null) {
             lead.setProductsOther(request.productsOther());
         }
@@ -444,6 +450,7 @@ public class LeadService {
                 .and(LeadSpecifications.hasState(filter.stateId()))
                 .and(LeadSpecifications.hasCity(filter.cityId()))
                 .and(LeadSpecifications.hasProduct(filter.productId()))
+                .and(LeadSpecifications.hasInterestReason(filter.interestReasonId()))
                 .and(LeadSpecifications.createdBetween(filter.dateFrom(), filter.dateTo()));
 
         if (principal.getRole() == Role.EMPLOYEE) {
@@ -491,6 +498,7 @@ public class LeadService {
                 .and(LeadSpecifications.hasState(filter.stateId()))
                 .and(LeadSpecifications.hasCity(filter.cityId()))
                 .and(LeadSpecifications.hasProduct(filter.productId()))
+                .and(LeadSpecifications.hasInterestReason(filter.interestReasonId()))
                 .and(LeadSpecifications.hasBusinessType(filter.businessTypeId()))
                 .and(LeadSpecifications.hasNextFollowupDate(filter.nextFollowupDate()))
                 .and(LeadSpecifications.hasExpectedCloseDate(filter.expectedCloseDate()))
@@ -592,6 +600,21 @@ public class LeadService {
             for (UUID productId : productIds) {
                 masterDataService.validateReference(productId, MasterType.PRODUCT, "productIds");
             }
+        }
+    }
+
+    /**
+     * Applies the reasons behind the lead's interest level (already updated above). Supplied ids
+     * replace the set after validation against the lead's CURRENT interest level; when the
+     * level itself changed (compared with its value before this update) and no reasons were sent, the old level's reasons no longer make
+     * sense, so they are cleared. Omitted and level unchanged means leave as is.
+     */
+    private void applyInterestReasons(Lead lead, Set<UUID> reasonIds, boolean interestLevelChanged) {
+        if (reasonIds != null) {
+            masterDataService.validateInterestReasons(reasonIds, lead.getInterestLevelId());
+            lead.setInterestReasonIds(new HashSet<>(reasonIds));
+        } else if (interestLevelChanged) {
+            lead.getInterestReasonIds().clear();
         }
     }
 

@@ -7,4 +7,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface LeadAttachmentRepository extends JpaRepository<LeadAttachment, UUID> {
 
     List<LeadAttachment> findByLeadIdOrderByCreatedAtDesc(UUID leadId);
+
+    List<LeadAttachment> findByPoIdOrderByCreatedAtDesc(UUID poId);
 }

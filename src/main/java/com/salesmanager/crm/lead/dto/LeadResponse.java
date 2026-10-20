@@ -50,6 +50,7 @@ public record LeadResponse(
         UUID ownerId,
         UUID createdBy,
         Set<UUID> productIds,
+        Set<UUID> interestReasonIds,
         String productsOther,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
@@ -92,6 +93,7 @@ public record LeadResponse(
                 lead.getOwnerId(),
                 lead.getCreatedBy(),
                 lead.getProductIds(),
+                lead.getInterestReasonIds(),
                 lead.getProductsOther(),
                 lead.getCreatedAt(),
                 lead.getUpdatedAt());

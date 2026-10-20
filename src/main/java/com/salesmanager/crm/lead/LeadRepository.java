@@ -111,4 +111,31 @@ public interface LeadRepository extends JpaRepository<Lead, UUID>, JpaSpecificat
     @Query("SELECT l.interestLevelId AS interestLevelId, l.status AS status, COUNT(l) AS count FROM Lead l "
             + "WHERE l.ownerId IN :ownerIds GROUP BY l.interestLevelId, l.status")
     List<LeadInterestStatusCount> countGroupedByInterestLevelAndStatusForOwners(@Param("ownerIds") Set<UUID> ownerIds);
+
+    /** Leads per (interest level, reason), created within [from, to). */
+    @Query("SELECT l.interestLevelId AS interestLevelId, r AS reasonId, COUNT(l) AS count FROM Lead l "
+            + "JOIN l.interestReasonIds r WHERE l.createdAt >= :from AND l.createdAt < :to "
+            + "GROUP BY l.interestLevelId, r")
+    List<LeadInterestReasonCount> countReasons(@Param("from") java.time.OffsetDateTime from,
+                                               @Param("to") java.time.OffsetDateTime to);
+
+    /** Team-visibility counterpart to {@link #countReasons}. */
+    @Query("SELECT l.interestLevelId AS interestLevelId, r AS reasonId, COUNT(l) AS count FROM Lead l "
+            + "JOIN l.interestReasonIds r WHERE l.ownerId IN :ownerIds "
+            + "AND l.createdAt >= :from AND l.createdAt < :to GROUP BY l.interestLevelId, r")
+    List<LeadInterestReasonCount> countReasonsForOwners(@Param("ownerIds") Set<UUID> ownerIds,
+                                                        @Param("from") java.time.OffsetDateTime from,
+                                                        @Param("to") java.time.OffsetDateTime to);
+
+    /** Distinct leads that have at least one interest reason, within [from, to). */
+    @Query("SELECT COUNT(DISTINCT l.id) FROM Lead l JOIN l.interestReasonIds r "
+            + "WHERE l.createdAt >= :from AND l.createdAt < :to")
+    long countLeadsWithReasons(@Param("from") java.time.OffsetDateTime from,
+                               @Param("to") java.time.OffsetDateTime to);
+
+    @Query("SELECT COUNT(DISTINCT l.id) FROM Lead l JOIN l.interestReasonIds r "
+            + "WHERE l.ownerId IN :ownerIds AND l.createdAt >= :from AND l.createdAt < :to")
+    long countLeadsWithReasonsForOwners(@Param("ownerIds") Set<UUID> ownerIds,
+                                        @Param("from") java.time.OffsetDateTime from,
+                                        @Param("to") java.time.OffsetDateTime to);
 }

@@ -61,6 +61,12 @@ class InvoicePdfHtmlBuilder {
                 .append(cancelled ? "<div class=\"cancelled\">CANCELLED</div>" : "")
                 .append("<div>Invoice No.: ").append(esc(invoice.getInvoiceNumber())).append("</div>")
                 .append("<div>Invoice Date: ").append(esc(invoice.getInvoiceDate().format(DATE_FORMAT))).append("</div>");
+        if (isNotBlank(invoice.getPoNumber())) {
+            html.append("<div>PO No.: ").append(esc(invoice.getPoNumber())).append("</div>");
+            if (invoice.getPoDate() != null) {
+                html.append("<div>PO Date: ").append(esc(invoice.getPoDate().format(DATE_FORMAT))).append("</div>");
+            }
+        }
         if (invoice.getDueDate() != null) {
             html.append("<div>Due Date: ").append(esc(invoice.getDueDate().format(DATE_FORMAT))).append("</div>");
         }

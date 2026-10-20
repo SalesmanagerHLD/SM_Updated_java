@@ -105,6 +105,9 @@ public record LeadCreateRequest(
 
         Set<UUID> productIds,
 
+        /** Why the interest level was chosen (INTEREST_REASON ids under interestLevelId). */
+        Set<UUID> interestReasonIds,
+
         @Size(max = 2000, message = "productsOther must be at most 2000 characters")
         String productsOther,
 

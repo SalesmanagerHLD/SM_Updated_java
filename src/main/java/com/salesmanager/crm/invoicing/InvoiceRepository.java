@@ -24,6 +24,12 @@ public interface InvoiceRepository extends JpaRepository<Invoice, UUID>, JpaSpec
 
     boolean existsByInvoiceNumber(String invoiceNumber);
 
+    java.util.List<Invoice> findByPoIdOrderByCreatedAtDesc(UUID poId);
+
+    boolean existsByPoId(UUID poId);
+
+    boolean existsByPoIdAndStatusNot(UUID poId, InvoiceStatus status);
+
     /** Row-locks the invoice for the rest of the request-wide transaction - used by payment
      * recording and cancellation so two concurrent requests can't overpay or double-cancel. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)

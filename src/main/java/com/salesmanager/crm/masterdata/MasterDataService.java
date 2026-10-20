@@ -121,6 +121,33 @@ public class MasterDataService {
     }
 
     /**
+     * Validates the reasons chosen for an interest level: each must be an INTEREST_REASON whose
+     * parent is {@code interestLevelId}. Reasons without an interest level (none picked, or a
+     * free-text one) are rejected - there is nothing for them to hang off.
+     */
+    @Transactional(readOnly = true, noRollbackFor = InvalidReferenceException.class)
+    public void validateInterestReasons(java.util.Set<UUID> reasonIds, UUID interestLevelId) {
+        if (reasonIds == null || reasonIds.isEmpty()) {
+            return;
+        }
+        if (interestLevelId == null) {
+            throw new InvalidReferenceException("interestReasonIds",
+                    "interestReasonIds can only be set together with an interestLevelId");
+        }
+        for (UUID reasonId : reasonIds) {
+            MasterData reason = masterDataRepository.findById(reasonId).orElse(null);
+            if (reason == null || reason.getType() != MasterType.INTEREST_REASON) {
+                throw new InvalidReferenceException("interestReasonIds",
+                        "interestReasonIds does not reference a valid INTEREST_REASON");
+            }
+            if (!interestLevelId.equals(reason.getParentId())) {
+                throw new InvalidReferenceException("interestReasonIds",
+                        "interestReasonIds contains a reason that does not belong to the selected interest level");
+            }
+        }
+    }
+
+    /**
      * Validates a "creatable" field pair used by Lead/Visit capture forms: {@code fieldId} (a
      * real master_data reference) and {@code fieldOther} (operator-typed free text for a value
      * not yet in master data) are mutually exclusive - both non-null is rejected outright. Only

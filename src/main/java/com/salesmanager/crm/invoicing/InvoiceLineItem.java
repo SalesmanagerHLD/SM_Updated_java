@@ -39,6 +39,10 @@ public class InvoiceLineItem extends TenantAware {
     @Column(name = "product_id")
     private UUID productId;
 
+    /** The purchase-order line this line bills, if any. */
+    @Column(name = "po_line_id")
+    private UUID poLineId;
+
     @Column(name = "hsn_sac", length = 20)
     private String hsnSac;
 

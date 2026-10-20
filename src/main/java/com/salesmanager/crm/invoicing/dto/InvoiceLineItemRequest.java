@@ -37,5 +37,9 @@ public record InvoiceLineItemRequest(
         BigDecimal taxRatePercent,
 
         @Size(max = 20, message = "unit must be at most 20 characters")
-        String unit) {
+        String unit,
+
+        /** On a PO invoice: the PO line being billed. Price, tax, HSN and description then come
+         * from the PO line; only quantity is taken from this request. */
+        UUID poLineId) {
 }

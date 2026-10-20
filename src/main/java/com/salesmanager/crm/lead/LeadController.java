@@ -51,11 +51,12 @@ public class LeadController {
                                     @RequestParam(required = false) UUID stateId,
                                     @RequestParam(required = false) UUID cityId,
                                     @RequestParam(required = false) UUID productId,
+                                    @RequestParam(required = false) UUID interestReasonId,
                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo,
                                     Pageable pageable) {
         LeadFilter filter = new LeadFilter(status, ownerId, interestLevelId, search,
-                stateId, cityId, productId, dateFrom, dateTo);
+                stateId, cityId, productId, dateFrom, dateTo, interestReasonId);
         return leadService.list(filter, pageable).map(LeadResponse::from);
     }
 

@@ -168,4 +168,12 @@ public class Visit extends TenantAware {
     /** Short human-readable reason for the most recent FAILED sync attempt - null otherwise. */
     @Column(name = "calendar_sync_error")
     private String calendarSyncError;
+
+    /** References master_data rows of type INTEREST_REASON - why this visit has its interest
+     * level. Every reason's parent must be the interestLevelId (validated in the service). */
+    @ElementCollection
+    @CollectionTable(name = "visit_interest_reasons", joinColumns = @JoinColumn(name = "visit_id"))
+    @Column(name = "reason_id")
+    @Builder.Default
+    private Set<UUID> interestReasonIds = new HashSet<>();
 }

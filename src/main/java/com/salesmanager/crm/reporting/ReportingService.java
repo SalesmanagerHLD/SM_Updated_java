@@ -26,7 +26,10 @@ import com.salesmanager.crm.masterdata.MasterType;
 import com.salesmanager.crm.quotation.QuotationRepository;
 import com.salesmanager.crm.quotation.QuotationStatus;
 import com.salesmanager.crm.reporting.dto.ConversionRateResponse;
+import com.salesmanager.crm.lead.LeadInterestReasonCount;
 import com.salesmanager.crm.reporting.dto.InterestLevelStatusMatrixResponse;
+import com.salesmanager.crm.reporting.dto.InterestReasonReportResponse;
+import com.salesmanager.crm.reporting.dto.InterestReasonRow;
 import com.salesmanager.crm.reporting.dto.InterestLevelStatusRow;
 import com.salesmanager.crm.reporting.dto.LeadDashboardResponse;
 import com.salesmanager.crm.reporting.dto.LeadSourceBreakdown;
@@ -300,6 +303,51 @@ public class ReportingService {
             total += row.getCount();
         }
         return new VisitsByTypeResponse(byType, total);
+    }
+
+    /**
+     * Reports' "Why is it Hot/Warm/Cold?" breakdown: per interest level, how many leads carry
+     * each admin-defined reason. Same owner scoping as the other lead reports; optionally limited
+     * to leads created between the (inclusive) dates.
+     */
+    @Transactional(readOnly = true, noRollbackFor = AccessDeniedException.class)
+    public InterestReasonReportResponse interestReasons(LocalDate dateFrom, LocalDate dateTo) {
+        Set<UUID> ownerScope = resolveOwnerScope();
+        java.time.OffsetDateTime from = (dateFrom != null ? dateFrom : LocalDate.of(1970, 1, 1))
+                .atStartOfDay(java.time.ZoneOffset.UTC).toOffsetDateTime();
+        java.time.OffsetDateTime to = (dateTo != null ? dateTo.plusDays(1) : LocalDate.of(9999, 1, 1))
+                .atStartOfDay(java.time.ZoneOffset.UTC).toOffsetDateTime();
+
+        List<LeadInterestReasonCount> counts = ownerScope == null
+                ? leadRepository.countReasons(from, to)
+                : leadRepository.countReasonsForOwners(ownerScope, from, to);
+        long leadsWithReasons = ownerScope == null
+                ? leadRepository.countLeadsWithReasons(from, to)
+                : leadRepository.countLeadsWithReasonsForOwners(ownerScope, from, to);
+
+        List<MasterData> levels = masterDataRepository.findByType(MasterType.INTEREST_LEVEL, Sort.unsorted());
+        Map<UUID, MasterData> levelById = levels.stream().collect(Collectors.toMap(MasterData::getId, m -> m));
+        Map<UUID, String> reasonLabelById = masterDataRepository
+                .findByType(MasterType.INTEREST_REASON, Sort.unsorted()).stream()
+                .collect(Collectors.toMap(MasterData::getId, MasterData::getLabel));
+
+        List<InterestReasonRow> rows = new ArrayList<>();
+        for (LeadInterestReasonCount row : counts) {
+            MasterData level = row.getInterestLevelId() == null ? null : levelById.get(row.getInterestLevelId());
+            rows.add(new InterestReasonRow(level != null ? level.getLabel() : INTEREST_LEVEL_NOT_SET,
+                    reasonLabelById.getOrDefault(row.getReasonId(), "(removed)"), row.getCount()));
+        }
+        // Hot, Warm, Cold first (by code, so relabelled levels keep their place), then the rest.
+        Map<String, Integer> levelRank = new java.util.HashMap<>();
+        for (MasterData level : levels) {
+            int rank = INTEREST_LEVEL_CODE_ORDER.indexOf(level.getCode());
+            levelRank.put(level.getLabel(), rank >= 0 ? rank : INTEREST_LEVEL_CODE_ORDER.size());
+        }
+        rows.sort(java.util.Comparator
+                .comparingInt((InterestReasonRow r) -> levelRank.getOrDefault(r.interestLevel(), 99))
+                .thenComparing(InterestReasonRow::count, java.util.Comparator.reverseOrder())
+                .thenComparing(InterestReasonRow::reason));
+        return new InterestReasonReportResponse(rows, leadsWithReasons);
     }
 
     /** Fixed display order for interestLevelStatusMatrix's rows - matches the business-critical,

@@ -75,6 +75,7 @@ public class VisitService {
                 request.stateId(), request.stateOther(),
                 request.cityId(), request.cityOther(),
                 request.productIds());
+        masterDataService.validateInterestReasons(request.interestReasonIds(), request.interestLevelId());
 
         UUID currentEmployeeId = currentUser.get().getEmployeeId();
         Visit visit = Visit.builder()
@@ -105,6 +106,8 @@ public class VisitService {
                 .status(request.status() != null ? request.status() : VisitStatus.PLANNED)
                 .createdBy(currentEmployeeId)
                 .productIds(new HashSet<>(request.productIds() != null ? request.productIds() : Set.of()))
+                .interestReasonIds(new HashSet<>(
+                        request.interestReasonIds() != null ? request.interestReasonIds() : Set.of()))
                 .productsOther(request.productsOther())
                 .build();
 
@@ -113,7 +116,7 @@ public class VisitService {
         // about that interaction. Only fields actually present on this request are synced.
         syncBackToLead(lead, request.contactPerson(), request.designationId(), request.contactNo(),
                 request.email(), request.cityId(), request.address(), request.budgetRange(),
-                request.interestLevelId());
+                request.interestLevelId(), request.interestReasonIds());
 
         // saveAndFlush - see EmployeeService#create's comment re: @CreationTimestamp/@UpdateTimestamp.
         Visit saved = visitRepository.saveAndFlush(visit);
@@ -141,6 +144,7 @@ public class VisitService {
 
         applyCreatableField(request.purposeId(), request.purposeOther(), MasterType.VISIT_PURPOSE,
                 "purposeId", "purposeOther", null, visit::setPurposeId, visit::setPurposeOther);
+        UUID oldInterestLevelId = visit.getInterestLevelId();
         applyCreatableField(request.interestLevelId(), request.interestLevelOther(), MasterType.INTEREST_LEVEL,
                 "interestLevelId", "interestLevelOther", null, visit::setInterestLevelId, visit::setInterestLevelOther);
         applyCreatableField(request.designationId(), request.designationOther(), MasterType.DESIGNATION,
@@ -194,6 +198,13 @@ public class VisitService {
         if (request.productIds() != null) {
             visit.setProductIds(new HashSet<>(request.productIds()));
         }
+        if (request.interestReasonIds() != null) {
+            masterDataService.validateInterestReasons(request.interestReasonIds(), visit.getInterestLevelId());
+            visit.setInterestReasonIds(new HashSet<>(request.interestReasonIds()));
+        } else if (!java.util.Objects.equals(oldInterestLevelId, visit.getInterestLevelId())) {
+            // A different level with no reasons sent: the old level's reasons no longer apply.
+            visit.getInterestReasonIds().clear();
+        }
         if (request.productsOther() != null) {
             visit.setProductsOther(request.productsOther());
         }
@@ -219,7 +230,7 @@ public class VisitService {
 
         syncBackToLead(lead, request.contactPerson(), request.designationId(), request.contactNo(),
                 request.email(), request.cityId(), request.address(), request.budgetRange(),
-                request.interestLevelId());
+                request.interestLevelId(), request.interestReasonIds());
 
         // saveAndFlush - see EmployeeService#create's comment re: @CreationTimestamp/@UpdateTimestamp.
         Visit saved = visitRepository.saveAndFlush(visit);
@@ -453,7 +464,7 @@ public class VisitService {
      */
     private void syncBackToLead(Lead lead, String contactPerson, UUID designationId, String contactNo,
                                 String email, UUID cityId, String address, String budgetRange,
-                                UUID interestLevelId) {
+                                UUID interestLevelId, Set<UUID> interestReasonIds) {
         boolean changed = false;
         if (contactPerson != null) {
             lead.setContactPerson(contactPerson);
@@ -484,7 +495,15 @@ public class VisitService {
             changed = true;
         }
         if (interestLevelId != null) {
+            boolean levelChanged = !interestLevelId.equals(lead.getInterestLevelId());
             lead.setInterestLevelId(interestLevelId);
+            // The lead mirrors the visit's reasons; a different level with no reasons sent means
+            // the old level's reasons no longer apply.
+            if (interestReasonIds != null) {
+                lead.setInterestReasonIds(new HashSet<>(interestReasonIds));
+            } else if (levelChanged) {
+                lead.getInterestReasonIds().clear();
+            }
             changed = true;
         }
         if (changed) {

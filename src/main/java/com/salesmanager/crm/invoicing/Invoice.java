@@ -102,6 +102,21 @@ public class Invoice extends TenantAware {
     @Column(name = "quotation_id")
     private UUID quotationId;
 
+    /** Set when this invoice bills a customer purchase order; null otherwise. */
+    @Column(name = "po_id")
+    private UUID poId;
+
+    /** Snapshot of the PO number/date - copied from the PO, or typed on an invoice with no PO. */
+    @Column(name = "po_number", length = 100)
+    private String poNumber;
+
+    @Column(name = "po_date")
+    private LocalDate poDate;
+
+    /** Why an ADMIN was allowed to bill past a PO line's remaining quantity, if they did. */
+    @Column(name = "po_override_reason", length = 500)
+    private String poOverrideReason;
+
     @Column(nullable = false)
     private BigDecimal subtotal;
 
