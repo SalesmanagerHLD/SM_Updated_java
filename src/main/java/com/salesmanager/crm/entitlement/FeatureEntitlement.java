@@ -23,12 +23,20 @@ public enum FeatureEntitlement {
     TEAM_VISIBILITY,
 
     /**
-     * Bundles the Product catalog/stock module AND Invoicing as ONE licensed feature (the
-     * user's explicit choice - Invoicing is "instead of independent" of Inventory, not a
-     * separately gated add-on). Gates every endpoint in the {@code inventory} and
-     * {@code invoicing} packages via {@link RequireEntitlement}.
+     * The Product catalog and stock module. Gates every endpoint in the {@code inventory}
+     * package via {@link RequireEntitlement}. Invoicing used to be bundled in here; it now has
+     * its own {@link #INVOICING} entitlement (V24 granted that to every org that already had
+     * this one, so nobody lost access).
      */
     INVENTORY_MANAGEMENT,
+
+    /**
+     * Customers, Quotations, Invoices, payments and the billing profile - the whole billing
+     * workflow. Gates the {@code customer}, {@code quotation} and {@code invoicing} endpoints,
+     * plus the dashboard's revenue/invoice stat cards. A services business with no stock needs
+     * only this one.
+     */
+    INVOICING,
 
     /**
      * Gates instant Firebase Cloud Messaging push delivery for the Notification Center - the

@@ -18,6 +18,7 @@ public record QuotationLineItemResponse(
         BigDecimal lineDiscountAmount,
         BigDecimal lineTaxableAmount,
         BigDecimal lineCgstAmount,
+        BigDecimal lineIgstAmount,
         BigDecimal lineSgstAmount,
         BigDecimal lineTotal,
         int sortOrder) {
@@ -37,6 +38,7 @@ public record QuotationLineItemResponse(
                 item.getLineDiscountAmount(),
                 item.getLineTaxableAmount(),
                 item.getLineCgstAmount(),
+                item.getLineIgstAmount(),
                 item.getLineSgstAmount(),
                 item.getLineTotal(),
                 item.getSortOrder());

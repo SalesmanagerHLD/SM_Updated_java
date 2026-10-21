@@ -72,7 +72,7 @@ class InvoiceCrudIT extends AbstractIntegrationTest {
         assertThat(invoice.get("status").asText()).isEqualTo("UNPAID");
         assertThat(invoice.get("leadId").isNull()).isTrue();
         assertThat(invoice.get("invoiceNumber").asText())
-                .isEqualTo("INV-" + LocalDate.now().getYear() + "-0001");
+                .isEqualTo("INV/" + FinancialYear.label(FinancialYear.startYear(LocalDate.now())) + "/0001");
         assertThat(invoice.get("lineItems").size()).isEqualTo(1);
         assertThat(invoice.get("lineItems").get(0).get("productId").isNull()).isTrue();
     }
@@ -229,10 +229,13 @@ class InvoiceCrudIT extends AbstractIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-Platform-Key", platformAdminKey);
-        ResponseEntity<String> response = restTemplate.exchange(
-                baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + CODE,
-                HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // Invoicing has its own entitlement now; these tests also use products, so grant both.
+        for (String code : java.util.List.of(CODE, "INVOICING")) {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + code,
+                    HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        }
     }
 
     private AuthResponse createAndLoginEmployee(String adminToken, String label) {

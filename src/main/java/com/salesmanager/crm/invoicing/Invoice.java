@@ -16,6 +16,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.Filter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Create-only in v1 - no edit/delete/void endpoint exists, so this entity is written once by
@@ -100,6 +102,21 @@ public class Invoice extends TenantAware {
     @Column(name = "quotation_id")
     private UUID quotationId;
 
+    /** Set when this invoice bills a customer purchase order; null otherwise. */
+    @Column(name = "po_id")
+    private UUID poId;
+
+    /** Snapshot of the PO number/date - copied from the PO, or typed on an invoice with no PO. */
+    @Column(name = "po_number", length = 100)
+    private String poNumber;
+
+    @Column(name = "po_date")
+    private LocalDate poDate;
+
+    /** Why an ADMIN was allowed to bill past a PO line's remaining quantity, if they did. */
+    @Column(name = "po_override_reason", length = 500)
+    private String poOverrideReason;
+
     @Column(nullable = false)
     private BigDecimal subtotal;
 
@@ -116,4 +133,102 @@ public class Invoice extends TenantAware {
 
     @Column(length = 2000)
     private String notes;
+
+    /** Optional link to the Customer master - set when created from a Customer/Quotation. */
+    @Column(name = "customer_id")
+    private UUID customerId;
+
+    /** master_data STATE row that decides CGST+SGST vs IGST together with {@link #sellerStateId}.
+     * Null means "not known" and is treated as intra-state (place of supply = seller's state). */
+    @Column(name = "place_of_supply_state_id")
+    private UUID placeOfSupplyStateId;
+
+    // Seller snapshot (Rule 46): copied from the Organization when the invoice is issued, so a
+    // later billing-profile edit never rewrites an already-issued invoice or its PDF.
+    @Column(name = "seller_name", length = 255)
+    private String sellerName;
+
+    @Column(name = "seller_gstin", length = 20)
+    private String sellerGstin;
+
+    @Column(name = "seller_address", length = 500)
+    private String sellerAddress;
+
+    @Column(name = "seller_phone", length = 50)
+    private String sellerPhone;
+
+    @Column(name = "seller_state_id")
+    private UUID sellerStateId;
+
+    @Column(name = "seller_bank_name", length = 255)
+    private String sellerBankName;
+
+    @Column(name = "seller_bank_account_number", length = 50)
+    private String sellerBankAccountNumber;
+
+    @Column(name = "seller_bank_ifsc", length = 20)
+    private String sellerBankIfsc;
+
+    @Column(name = "seller_bank_branch", length = 255)
+    private String sellerBankBranch;
+
+    @Column(name = "seller_upi_id", length = 100)
+    private String sellerUpiId;
+
+    @Column(name = "seller_header_text", length = 1000)
+    private String sellerHeaderText;
+
+    @Column(name = "seller_footer_text", length = 1000)
+    private String sellerFooterText;
+
+    @Column(name = "discount_total", nullable = false)
+    @Builder.Default
+    private BigDecimal discountTotal = BigDecimal.ZERO;
+
+    @Column(name = "taxable_amount", nullable = false)
+    @Builder.Default
+    private BigDecimal taxableAmount = BigDecimal.ZERO;
+
+    @Column(name = "cgst_total", nullable = false)
+    @Builder.Default
+    private BigDecimal cgstTotal = BigDecimal.ZERO;
+
+    @Column(name = "sgst_total", nullable = false)
+    @Builder.Default
+    private BigDecimal sgstTotal = BigDecimal.ZERO;
+
+    @Column(name = "igst_total", nullable = false)
+    @Builder.Default
+    private BigDecimal igstTotal = BigDecimal.ZERO;
+
+    @Column(name = "cancelled_at")
+    private java.time.OffsetDateTime cancelledAt;
+
+    @Column(name = "cancel_reason", length = 500)
+    private String cancelReason;
+
+    @Column(name = "cancelled_by")
+    private UUID cancelledBy;
+
+    /** JSON copy of the invoice design in force when this invoice was issued (null for invoices
+     * issued before custom designs - those render with the default design). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "design_settings", columnDefinition = "jsonb")
+    private String designSettings;
+
+    /** Copies the seller's current billing profile onto this invoice (call once, at issue). */
+    public void snapshotSellerFrom(com.salesmanager.crm.tenant.Organization o) {
+        this.sellerName = o.getName();
+        this.sellerGstin = o.getBillingGstin();
+        this.sellerAddress = o.getBillingAddress();
+        this.sellerPhone = o.getBillingPhone();
+        this.sellerStateId = o.getBillingStateId();
+        this.sellerBankName = o.getBankName();
+        this.sellerBankAccountNumber = o.getBankAccountNumber();
+        this.sellerBankIfsc = o.getBankIfsc();
+        this.sellerBankBranch = o.getBankBranch();
+        this.sellerUpiId = o.getUpiId();
+        this.sellerHeaderText = o.getInvoiceHeaderText();
+        this.sellerFooterText = o.getInvoiceFooterText();
+    }
 }

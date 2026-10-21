@@ -1,7 +1,8 @@
 package com.salesmanager.crm.invoicing;
 
+import com.salesmanager.crm.invoicing.design.InvoiceDesignSettings;
 import com.openhtmltopdf.pdfboxout.PdfRendererBuilder;
-import com.salesmanager.crm.invoicing.dto.BillingProfileResponse;
+import java.math.BigDecimal;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -17,9 +18,9 @@ public class InvoicePdfService {
         this.htmlBuilder = htmlBuilder;
     }
 
-    public byte[] renderPdf(Invoice invoice, List<InvoiceLineItem> lineItems, BillingProfileResponse billingProfile,
-                             String logoDataUri) {
-        String html = htmlBuilder.build(invoice, lineItems, billingProfile, logoDataUri);
+    public byte[] renderPdf(Invoice invoice, List<InvoiceLineItem> lineItems, BigDecimal amountPaid,
+                             String logoDataUri, InvoiceDesignSettings design) {
+        String html = htmlBuilder.build(invoice, lineItems, amountPaid, logoDataUri, design);
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
             PdfRendererBuilder builder = new PdfRendererBuilder();
             builder.withHtmlContent(html, null);

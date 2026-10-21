@@ -37,7 +37,7 @@ public class CustomerController {
     }
 
     @GetMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public Page<CustomerResponse> list(@RequestParam(required = false) String search,
                                         @RequestParam(required = false) UUID cityId,
                                         @RequestParam(required = false) UUID stateId,
@@ -48,20 +48,20 @@ public class CustomerController {
     }
 
     @GetMapping("/{id}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public CustomerResponse getById(@PathVariable UUID id) {
         return CustomerResponse.from(customerService.getById(id));
     }
 
     @PostMapping
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     @ResponseStatus(HttpStatus.CREATED)
     public CustomerResponse create(@Valid @RequestBody CustomerCreateRequest request) {
         return CustomerResponse.from(customerService.create(request));
     }
 
     @PutMapping("/{id}")
-    @RequireEntitlement(FeatureEntitlement.INVENTORY_MANAGEMENT)
+    @RequireEntitlement(FeatureEntitlement.INVOICING)
     public CustomerResponse update(@PathVariable UUID id, @Valid @RequestBody CustomerUpdateRequest request) {
         return CustomerResponse.from(customerService.update(id, request));
     }

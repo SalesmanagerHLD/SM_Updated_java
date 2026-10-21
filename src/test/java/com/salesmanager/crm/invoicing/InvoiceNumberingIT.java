@@ -31,7 +31,7 @@ import org.springframework.http.ResponseEntity;
 
 /**
  * Invoice numbering (invoicing.InvoiceNumberService): sequential per (organizationId,
- * invoiceDate year), resetting to 0001 each year rather than drifting, and a genuine
+ * invoiceDate financial year), restarting at 0001 each 1 April rather than drifting, and a genuine
  * concurrent-creation race - several threads racing to allocate a number for the SAME
  * org+year must each get a distinct, sequential number with no duplicates and no gaps.
  */
@@ -45,27 +45,28 @@ class InvoiceNumberingIT extends AbstractIntegrationTest {
     private String platformAdminKey;
 
     @Test
-    void invoiceNumber_resetsToZeroOneEachYear_ratherThanDrifting() {
+    void invoiceNumber_restartsEachFinancialYear_ratherThanDrifting() {
         AuthResponse admin = registerOrganization("Invoice Numbering Year Org");
         grant(admin.orgId());
 
-        String thisYear = String.valueOf(LocalDate.now().getYear());
-        String nextYear = String.valueOf(LocalDate.now().getYear() + 1);
+        // Numbers follow the Indian financial year (Apr-Mar): INV/26-27/0001.
+        String thisYear = FinancialYear.label(FinancialYear.startYear(LocalDate.now()));
+        String nextYear = FinancialYear.label(FinancialYear.startYear(LocalDate.now()) + 1);
 
         JsonNode first = parse(createInvoice(admin.accessToken(), LocalDate.now()).getBody());
-        assertThat(first.get("invoiceNumber").asText()).isEqualTo("INV-" + thisYear + "-0001");
+        assertThat(first.get("invoiceNumber").asText()).isEqualTo("INV/" + thisYear + "/0001");
 
         JsonNode second = parse(createInvoice(admin.accessToken(), LocalDate.now()).getBody());
-        assertThat(second.get("invoiceNumber").asText()).isEqualTo("INV-" + thisYear + "-0002");
+        assertThat(second.get("invoiceNumber").asText()).isEqualTo("INV/" + thisYear + "/0002");
 
         // A future-dated invoice starts its OWN year's counter at 0001, not continuing from 2.
         JsonNode futureYear = parse(createInvoice(admin.accessToken(), LocalDate.now().plusYears(1)).getBody());
-        assertThat(futureYear.get("invoiceNumber").asText()).isEqualTo("INV-" + nextYear + "-0001");
+        assertThat(futureYear.get("invoiceNumber").asText()).isEqualTo("INV/" + nextYear + "/0001");
 
         // Back to this year - continues from where it left off (3rd invoice of thisYear), not
         // reset again.
         JsonNode third = parse(createInvoice(admin.accessToken(), LocalDate.now()).getBody());
-        assertThat(third.get("invoiceNumber").asText()).isEqualTo("INV-" + thisYear + "-0003");
+        assertThat(third.get("invoiceNumber").asText()).isEqualTo("INV/" + thisYear + "/0003");
     }
 
     @Test
@@ -91,9 +92,9 @@ class InvoiceNumberingIT extends AbstractIntegrationTest {
             // counter allocation would show up here as fewer than 8 unique values.
             assertThat(invoiceNumbers).hasSize(threadCount);
 
-            int year = LocalDate.now().getYear();
+            String fy = FinancialYear.label(FinancialYear.startYear(LocalDate.now()));
             for (int i = 1; i <= threadCount; i++) {
-                assertThat(invoiceNumbers).contains(String.format("INV-%d-%04d", year, i));
+                assertThat(invoiceNumbers).contains(String.format("INV/%s/%04d", fy, i));
             }
         } finally {
             executor.shutdown();
@@ -125,10 +126,13 @@ class InvoiceNumberingIT extends AbstractIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("X-Platform-Key", platformAdminKey);
-        ResponseEntity<String> response = restTemplate.exchange(
-                baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + CODE,
-                HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // Invoicing has its own entitlement now; these tests also use products, so grant both.
+        for (String code : java.util.List.of(CODE, "INVOICING")) {
+            ResponseEntity<String> response = restTemplate.exchange(
+                    baseUrl() + "/internal/organizations/" + orgId + "/entitlements/" + code,
+                    HttpMethod.PATCH, new HttpEntity<>(body, headers), String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        }
     }
 
     private ResponseEntity<String> post(String path, String token, Object body) {

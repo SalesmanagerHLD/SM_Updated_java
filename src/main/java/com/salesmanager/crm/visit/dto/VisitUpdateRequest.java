@@ -65,6 +65,8 @@ public record VisitUpdateRequest(
 
         Set<UUID> productIds,
 
+        Set<UUID> interestReasonIds,
+
         @Size(max = 2000, message = "productsOther must be at most 2000 characters")
         String productsOther,
 

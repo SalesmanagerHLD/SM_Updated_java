@@ -94,6 +94,9 @@ public record LeadUpdateRequest(
 
         Set<UUID> productIds,
 
+        /** null = leave unchanged; an empty set clears the reasons. */
+        Set<UUID> interestReasonIds,
+
         @Size(max = 2000, message = "productsOther must be at most 2000 characters")
         String productsOther) {
 }

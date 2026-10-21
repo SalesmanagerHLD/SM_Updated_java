@@ -51,4 +51,8 @@ public class LeadAttachment extends TenantAware {
 
     @Column(name = "uploaded_by", nullable = false)
     private UUID uploadedBy;
+
+    /** Set when this file is a customer's purchase-order scan (see purchaseorder.PurchaseOrderService). */
+    @Column(name = "po_id")
+    private UUID poId;
 }

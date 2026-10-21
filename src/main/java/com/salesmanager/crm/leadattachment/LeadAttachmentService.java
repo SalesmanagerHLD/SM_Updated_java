@@ -49,6 +49,12 @@ public class LeadAttachmentService {
 
     @Transactional(noRollbackFor = {NotFoundException.class, InvalidAttachmentException.class})
     public LeadAttachment upload(UUID leadId, MultipartFile file) {
+        return upload(leadId, null, file);
+    }
+
+    /** Same as {@link #upload(UUID, MultipartFile)} but links the file to a purchase order too. */
+    @Transactional(noRollbackFor = {NotFoundException.class, InvalidAttachmentException.class})
+    public LeadAttachment upload(UUID leadId, UUID poId, MultipartFile file) {
         leadService.getById(leadId);
         validate(file);
 
@@ -68,6 +74,7 @@ public class LeadAttachmentService {
                 .contentType(file.getContentType())
                 .fileSize(file.getSize())
                 .uploadedBy(currentUser.get().getEmployeeId())
+                .poId(poId)
                 .build();
         // saveAndFlush - see EmployeeService#create's comment re: @CreationTimestamp/@UpdateTimestamp.
         return leadAttachmentRepository.saveAndFlush(attachment);

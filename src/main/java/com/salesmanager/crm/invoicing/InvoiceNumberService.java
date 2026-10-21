@@ -1,6 +1,7 @@
 package com.salesmanager.crm.invoicing;
 
 import jakarta.persistence.EntityManager;
+import java.time.LocalDate;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +28,10 @@ public class InvoiceNumberService {
     }
 
     @Transactional
-    public String allocateNext(UUID organizationId, int year) {
+    public String allocateNext(UUID organizationId, LocalDate invoiceDate) {
+        // The counter's "year" column holds the FINANCIAL year's start year (Apr-Mar), so the
+        // series restarts on 1 April: INV/26-27/0001. Max 14 chars, under the GST 16-char limit.
+        int year = FinancialYear.startYear(invoiceDate);
         entityManager.createNativeQuery(
                         "INSERT INTO invoice_number_counters (organization_id, year, next_number) "
                                 + "VALUES (:orgId, :year, 1) ON CONFLICT (organization_id, year) DO NOTHING")
@@ -49,6 +53,6 @@ public class InvoiceNumberService {
                 .setParameter("year", year)
                 .executeUpdate();
 
-        return String.format("INV-%d-%04d", year, nextNumber.intValue());
+        return String.format("INV/%s/%04d", FinancialYear.label(year), nextNumber.intValue());
     }
 }

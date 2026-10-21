@@ -4,6 +4,7 @@ import com.salesmanager.crm.lead.LeadDashboardFilter;
 import com.salesmanager.crm.lead.LeadStatus;
 import com.salesmanager.crm.reporting.dto.ConversionRateResponse;
 import com.salesmanager.crm.reporting.dto.InterestLevelStatusMatrixResponse;
+import com.salesmanager.crm.reporting.dto.InterestReasonReportResponse;
 import com.salesmanager.crm.reporting.dto.LeadDashboardResponse;
 import com.salesmanager.crm.reporting.dto.LeadsBySourceResponse;
 import com.salesmanager.crm.reporting.dto.PipelineSummaryResponse;
@@ -73,6 +74,13 @@ public class ReportingController {
         return reportingService.visitsByType(dateFrom, dateTo);
     }
 
+    @GetMapping("/interest-reasons")
+    public InterestReasonReportResponse interestReasons(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) {
+        return reportingService.interestReasons(dateFrom, dateTo);
+    }
+
     @GetMapping("/interest-level-status-matrix")
     public InterestLevelStatusMatrixResponse interestLevelStatusMatrix() {
         return reportingService.interestLevelStatusMatrix();
@@ -92,12 +100,13 @@ public class ReportingController {
             @RequestParam(required = false) UUID cityId,
             @RequestParam(required = false) UUID productId,
             @RequestParam(required = false) UUID businessTypeId,
+            @RequestParam(required = false) UUID interestReasonId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate nextFollowupDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate expectedCloseDate,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) {
         LeadDashboardFilter filter = new LeadDashboardFilter(status, ownerId, interestLevelId, stateId, cityId,
-                productId, businessTypeId, nextFollowupDate, expectedCloseDate, dateFrom, dateTo);
+                productId, businessTypeId, nextFollowupDate, expectedCloseDate, dateFrom, dateTo, interestReasonId);
         return reportingService.leadDashboard(filter);
     }
 

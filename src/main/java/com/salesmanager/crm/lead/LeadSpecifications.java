@@ -54,6 +54,12 @@ final class LeadSpecifications {
                 productId == null ? null : cb.isMember(productId, root.get("productIds"));
     }
 
+    /** Leads that carry the given INTEREST_REASON (lead_interest_reasons element collection). */
+    static Specification<Lead> hasInterestReason(UUID reasonId) {
+        return (root, query, cb) ->
+                reasonId == null ? null : cb.isMember(reasonId, root.get("interestReasonIds"));
+    }
+
     /** Backs the Reports Dashboard's global filter bar (section 17.5) - not used by GET /leads
      * itself. */
     static Specification<Lead> hasBusinessType(UUID businessTypeId) {

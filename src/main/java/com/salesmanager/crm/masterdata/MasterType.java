@@ -16,5 +16,8 @@ public enum MasterType {
     LOST_REASON,
     INTEREST_LEVEL,
     LEAD_SOURCE,
-    STATE
+    STATE,
+    /** Why a lead/visit has its interest level (e.g. Hot because "Budget approved"). Each row's
+     * parent_id is the INTEREST_LEVEL row it belongs to. */
+    INTEREST_REASON
 }

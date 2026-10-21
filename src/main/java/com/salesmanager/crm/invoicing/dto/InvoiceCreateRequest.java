@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.List;
@@ -17,6 +18,13 @@ import java.util.UUID;
  */
 public record InvoiceCreateRequest(
         UUID leadId,
+
+        /** Optional Customer master link; also supplies the default place-of-supply state. */
+        UUID customerId,
+
+        /** master_data STATE row of the place of supply. Defaults to the customer's state, then to
+         * the seller's own state. Decides CGST+SGST vs IGST - the tax type is never a user input. */
+        UUID placeOfSupplyStateId,
 
         @NotBlank(message = "customerName is required")
         @Size(max = 255, message = "customerName must be at most 255 characters")
@@ -35,6 +43,7 @@ public record InvoiceCreateRequest(
         String customerAddress,
 
         @Size(max = 20, message = "customerGstin must be at most 20 characters")
+        @Pattern(regexp = "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", message = "customerGstin must be a valid 15-character GSTIN")
         String customerGstin,
 
         @Size(max = 255, message = "shipToName must be at most 255 characters")
@@ -44,6 +53,7 @@ public record InvoiceCreateRequest(
         String shipToAddress,
 
         @Size(max = 20, message = "shipToGstin must be at most 20 characters")
+        @Pattern(regexp = "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", message = "shipToGstin must be a valid 15-character GSTIN")
         String shipToGstin,
 
         @NotNull(message = "invoiceDate is required")
@@ -61,5 +71,19 @@ public record InvoiceCreateRequest(
         List<InvoiceLineItemRequest> lineItems,
 
         @Size(max = 2000, message = "notes must be at most 2000 characters")
-        String notes) {
+        String notes,
+
+        /** Bills this customer purchase order: every line must then carry a poLineId, and the PO
+         * number/date are copied from the PO. */
+        UUID poId,
+
+        /** For an invoice with NO poId: the customer's PO reference, typed in. Ignored when poId is set. */
+        @Size(max = 100, message = "poNumber must be at most 100 characters")
+        String poNumber,
+
+        LocalDate poDate,
+
+        /** ADMIN only: required to bill past a PO line's remaining quantity. */
+        @Size(max = 500, message = "overBillingReason must be at most 500 characters")
+        String overBillingReason) {
 }

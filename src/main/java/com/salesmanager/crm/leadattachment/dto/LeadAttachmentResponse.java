@@ -11,6 +11,7 @@ public record LeadAttachmentResponse(
         String contentType,
         long fileSize,
         UUID uploadedBy,
+        UUID poId,
         OffsetDateTime createdAt) {
 
     public static LeadAttachmentResponse from(LeadAttachment attachment) {
@@ -21,6 +22,7 @@ public record LeadAttachmentResponse(
                 attachment.getContentType(),
                 attachment.getFileSize(),
                 attachment.getUploadedBy(),
+                attachment.getPoId(),
                 attachment.getCreatedAt());
     }
 }

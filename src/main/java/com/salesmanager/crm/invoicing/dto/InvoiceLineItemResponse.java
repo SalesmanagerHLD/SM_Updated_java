@@ -7,6 +7,7 @@ import java.util.UUID;
 public record InvoiceLineItemResponse(
         UUID id,
         UUID productId,
+        UUID poLineId,
         String hsnSac,
         String description,
         BigDecimal quantity,
@@ -18,12 +19,15 @@ public record InvoiceLineItemResponse(
         BigDecimal lineTaxAmount,
         BigDecimal lineCgstAmount,
         BigDecimal lineSgstAmount,
+        BigDecimal lineIgstAmount,
+        String unit,
         int sortOrder) {
 
     public static InvoiceLineItemResponse from(InvoiceLineItem item) {
         return new InvoiceLineItemResponse(
                 item.getId(),
                 item.getProductId(),
+                item.getPoLineId(),
                 item.getHsnSac(),
                 item.getDescription(),
                 item.getQuantity(),
@@ -35,6 +39,8 @@ public record InvoiceLineItemResponse(
                 item.getLineTaxAmount(),
                 item.getLineCgstAmount(),
                 item.getLineSgstAmount(),
+                item.getLineIgstAmount(),
+                item.getUnit(),
                 item.getSortOrder());
     }
 }

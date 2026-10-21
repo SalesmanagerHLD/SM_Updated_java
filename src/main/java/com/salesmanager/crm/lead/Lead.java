@@ -180,4 +180,12 @@ public class Lead extends TenantAware {
     @Column(name = "product_id")
     @Builder.Default
     private Set<UUID> productIds = new HashSet<>();
+
+    /** References master_data rows of type INTEREST_REASON - why this lead has its interest
+     * level. Every reason's parent must be the interestLevelId (validated in the service). */
+    @ElementCollection
+    @CollectionTable(name = "lead_interest_reasons", joinColumns = @JoinColumn(name = "lead_id"))
+    @Column(name = "reason_id")
+    @Builder.Default
+    private Set<UUID> interestReasonIds = new HashSet<>();
 }

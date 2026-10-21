@@ -39,6 +39,10 @@ public class InvoiceLineItem extends TenantAware {
     @Column(name = "product_id")
     private UUID productId;
 
+    /** The purchase-order line this line bills, if any. */
+    @Column(name = "po_line_id")
+    private UUID poLineId;
+
     @Column(name = "hsn_sac", length = 20)
     private String hsnSac;
 
@@ -78,4 +82,11 @@ public class InvoiceLineItem extends TenantAware {
 
     @Column(name = "sort_order", nullable = false)
     private int sortOrder;
+
+    @Column(length = 20)
+    private String unit;
+
+    @Column(name = "line_igst_amount", nullable = false)
+    @Builder.Default
+    private BigDecimal lineIgstAmount = BigDecimal.ZERO;
 }

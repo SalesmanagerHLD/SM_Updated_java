@@ -31,7 +31,7 @@ class MasterDataSeedingIT extends AbstractIntegrationTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void registeringOrganization_seedsAllElevenMasterTypes_withASensibleTotal() {
+    void registeringOrganization_seedsAllTwelveMasterTypes_withASensibleTotal() {
         AuthResponse admin = registerOrganization();
 
         int total = 0;
@@ -46,7 +46,8 @@ class MasterDataSeedingIT extends AbstractIntegrationTest {
 
         // Not an exact count (seed data may be tweaked over time) but proves it's a
         // real, non-trivial starter set rather than a handful of stub rows. Phase 7's richer
-        // seed lists (plus the new STATE type) push the real total to ~156.
+        // seed lists (plus the new STATE type and 12 starter interest reasons) push the real total
+        // to ~168.
         assertThat(total).isBetween(140, 220);
     }
 

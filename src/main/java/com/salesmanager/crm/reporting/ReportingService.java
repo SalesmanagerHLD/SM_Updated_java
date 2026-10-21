@@ -26,7 +26,10 @@ import com.salesmanager.crm.masterdata.MasterType;
 import com.salesmanager.crm.quotation.QuotationRepository;
 import com.salesmanager.crm.quotation.QuotationStatus;
 import com.salesmanager.crm.reporting.dto.ConversionRateResponse;
+import com.salesmanager.crm.lead.LeadInterestReasonCount;
 import com.salesmanager.crm.reporting.dto.InterestLevelStatusMatrixResponse;
+import com.salesmanager.crm.reporting.dto.InterestReasonReportResponse;
+import com.salesmanager.crm.reporting.dto.InterestReasonRow;
 import com.salesmanager.crm.reporting.dto.InterestLevelStatusRow;
 import com.salesmanager.crm.reporting.dto.LeadDashboardResponse;
 import com.salesmanager.crm.reporting.dto.LeadSourceBreakdown;
@@ -302,6 +305,51 @@ public class ReportingService {
         return new VisitsByTypeResponse(byType, total);
     }
 
+    /**
+     * Reports' "Why is it Hot/Warm/Cold?" breakdown: per interest level, how many leads carry
+     * each admin-defined reason. Same owner scoping as the other lead reports; optionally limited
+     * to leads created between the (inclusive) dates.
+     */
+    @Transactional(readOnly = true, noRollbackFor = AccessDeniedException.class)
+    public InterestReasonReportResponse interestReasons(LocalDate dateFrom, LocalDate dateTo) {
+        Set<UUID> ownerScope = resolveOwnerScope();
+        java.time.OffsetDateTime from = (dateFrom != null ? dateFrom : LocalDate.of(1970, 1, 1))
+                .atStartOfDay(java.time.ZoneOffset.UTC).toOffsetDateTime();
+        java.time.OffsetDateTime to = (dateTo != null ? dateTo.plusDays(1) : LocalDate.of(9999, 1, 1))
+                .atStartOfDay(java.time.ZoneOffset.UTC).toOffsetDateTime();
+
+        List<LeadInterestReasonCount> counts = ownerScope == null
+                ? leadRepository.countReasons(from, to)
+                : leadRepository.countReasonsForOwners(ownerScope, from, to);
+        long leadsWithReasons = ownerScope == null
+                ? leadRepository.countLeadsWithReasons(from, to)
+                : leadRepository.countLeadsWithReasonsForOwners(ownerScope, from, to);
+
+        List<MasterData> levels = masterDataRepository.findByType(MasterType.INTEREST_LEVEL, Sort.unsorted());
+        Map<UUID, MasterData> levelById = levels.stream().collect(Collectors.toMap(MasterData::getId, m -> m));
+        Map<UUID, String> reasonLabelById = masterDataRepository
+                .findByType(MasterType.INTEREST_REASON, Sort.unsorted()).stream()
+                .collect(Collectors.toMap(MasterData::getId, MasterData::getLabel));
+
+        List<InterestReasonRow> rows = new ArrayList<>();
+        for (LeadInterestReasonCount row : counts) {
+            MasterData level = row.getInterestLevelId() == null ? null : levelById.get(row.getInterestLevelId());
+            rows.add(new InterestReasonRow(level != null ? level.getLabel() : INTEREST_LEVEL_NOT_SET,
+                    reasonLabelById.getOrDefault(row.getReasonId(), "(removed)"), row.getCount()));
+        }
+        // Hot, Warm, Cold first (by code, so relabelled levels keep their place), then the rest.
+        Map<String, Integer> levelRank = new java.util.HashMap<>();
+        for (MasterData level : levels) {
+            int rank = INTEREST_LEVEL_CODE_ORDER.indexOf(level.getCode());
+            levelRank.put(level.getLabel(), rank >= 0 ? rank : INTEREST_LEVEL_CODE_ORDER.size());
+        }
+        rows.sort(java.util.Comparator
+                .comparingInt((InterestReasonRow r) -> levelRank.getOrDefault(r.interestLevel(), 99))
+                .thenComparing(InterestReasonRow::count, java.util.Comparator.reverseOrder())
+                .thenComparing(InterestReasonRow::reason));
+        return new InterestReasonReportResponse(rows, leadsWithReasons);
+    }
+
     /** Fixed display order for interestLevelStatusMatrix's rows - matches the business-critical,
      * never-expanded INTEREST_LEVEL codes (see MasterType's own javadoc); "Not Set" is a residual
      * bucket for a null interestLevelId (or a free-text interestLevelOther override), always
@@ -367,7 +415,7 @@ public class ReportingService {
     }
 
     /**
-     * Dashboard's "Revenue (YTD)" stat - gated behind INVENTORY_MANAGEMENT (Invoicing is an
+     * Dashboard's "Revenue (YTD)" stat - gated behind INVOICING (Invoicing is an
      * opt-in feature) so a non-entitled org gets {@code entitled=false} rather than a
      * misleading zero. resolveOwnerScope() runs FIRST regardless of entitlement, so a plain
      * EMPLOYEE without TEAM_VISIBILITY still gets the same 403 every other reporting endpoint
@@ -379,7 +427,7 @@ public class ReportingService {
     public RevenueResponse revenue(LocalDate dateFrom, LocalDate dateTo) {
         Set<UUID> ownerScope = resolveOwnerScope();
         UUID organizationId = currentUser.get().getOrganizationId();
-        if (!entitlementService.isEntitled(organizationId, FeatureEntitlement.INVENTORY_MANAGEMENT)) {
+        if (!entitlementService.isEntitled(organizationId, FeatureEntitlement.INVOICING)) {
             return new RevenueResponse(false, BigDecimal.ZERO);
         }
 
@@ -392,7 +440,7 @@ public class ReportingService {
     }
 
     /**
-     * Invoices Dashboard's stat-card row (section 17.4) - gated behind INVENTORY_MANAGEMENT
+     * Invoices Dashboard's stat-card row (section 17.4) - gated behind INVOICING
      * (same reasoning as {@link #revenue}: Quotations/Invoicing is an opt-in feature). dateFrom/
      * dateTo default to the current calendar month when omitted ("This Month", matching the
      * screenshot's default range) and scope totalQuotations/approvedQuotations/
@@ -403,7 +451,7 @@ public class ReportingService {
     public QuotationInvoiceSummaryResponse quotationInvoiceSummary(LocalDate dateFrom, LocalDate dateTo) {
         Set<UUID> ownerScope = resolveOwnerScope();
         UUID organizationId = currentUser.get().getOrganizationId();
-        if (!entitlementService.isEntitled(organizationId, FeatureEntitlement.INVENTORY_MANAGEMENT)) {
+        if (!entitlementService.isEntitled(organizationId, FeatureEntitlement.INVOICING)) {
             return new QuotationInvoiceSummaryResponse(0, 0, 0, 0, BigDecimal.ZERO, 0, BigDecimal.ZERO,
                     BigDecimal.ZERO, BigDecimal.ZERO);
         }
@@ -428,14 +476,14 @@ public class ReportingService {
                     QuotationStatus.APPROVED, effectiveFrom, effectiveTo);
             convertedToInvoice = quotationRepository.countByStatusAndQuotationDateBetween(
                     QuotationStatus.CONVERTED, effectiveFrom, effectiveTo);
-            pendingInvoicesCount = invoiceRepository.countByStatusAndInvoiceDateBetween(
-                    InvoiceStatus.UNPAID, effectiveFrom, effectiveTo);
-            pendingInvoicesAmount = invoiceRepository.sumGrandTotalByStatusBetween(
-                    InvoiceStatus.UNPAID, effectiveFrom, effectiveTo);
-            pendingPaymentsCount = invoiceRepository.countByStatusAndDueDateLessThan(InvoiceStatus.UNPAID, today);
-            pendingPaymentsAmount = invoiceRepository.sumGrandTotalByStatusAndDueDateBefore(InvoiceStatus.UNPAID, today);
+            pendingInvoicesCount = invoiceRepository.countByStatusInAndInvoiceDateBetween(
+                    InvoiceStatus.OPEN_STATUSES, effectiveFrom, effectiveTo);
+            pendingInvoicesAmount = invoiceRepository.sumBalanceDueByStatusBetween(
+                    InvoiceStatus.OPEN_STATUSES, effectiveFrom, effectiveTo);
+            pendingPaymentsCount = invoiceRepository.countByStatusInAndDueDateLessThan(InvoiceStatus.OPEN_STATUSES, today);
+            pendingPaymentsAmount = invoiceRepository.sumBalanceDueByStatusAndDueDateBefore(InvoiceStatus.OPEN_STATUSES, today);
             monthlyBilling = invoiceRepository.sumGrandTotalBetween(effectiveFrom, effectiveTo);
-            outstanding = invoiceRepository.sumGrandTotalByStatus(InvoiceStatus.UNPAID);
+            outstanding = invoiceRepository.sumBalanceDueByStatus(InvoiceStatus.OPEN_STATUSES);
         } else {
             totalQuotations = quotationRepository.countByOwnerIdInAndQuotationDateBetween(
                     ownerScope, effectiveFrom, effectiveTo);
@@ -443,16 +491,16 @@ public class ReportingService {
                     ownerScope, QuotationStatus.APPROVED, effectiveFrom, effectiveTo);
             convertedToInvoice = quotationRepository.countByOwnerIdInAndStatusAndQuotationDateBetween(
                     ownerScope, QuotationStatus.CONVERTED, effectiveFrom, effectiveTo);
-            pendingInvoicesCount = invoiceRepository.countByOwnerIdInAndStatusAndInvoiceDateBetween(
-                    ownerScope, InvoiceStatus.UNPAID, effectiveFrom, effectiveTo);
-            pendingInvoicesAmount = invoiceRepository.sumGrandTotalByStatusForOwnersBetween(
-                    ownerScope, InvoiceStatus.UNPAID, effectiveFrom, effectiveTo);
-            pendingPaymentsCount = invoiceRepository.countByOwnerIdInAndStatusAndDueDateLessThan(
-                    ownerScope, InvoiceStatus.UNPAID, today);
-            pendingPaymentsAmount = invoiceRepository.sumGrandTotalByStatusAndDueDateBeforeForOwners(
-                    ownerScope, InvoiceStatus.UNPAID, today);
+            pendingInvoicesCount = invoiceRepository.countByOwnerIdInAndStatusInAndInvoiceDateBetween(
+                    ownerScope, InvoiceStatus.OPEN_STATUSES, effectiveFrom, effectiveTo);
+            pendingInvoicesAmount = invoiceRepository.sumBalanceDueByStatusForOwnersBetween(
+                    ownerScope, InvoiceStatus.OPEN_STATUSES, effectiveFrom, effectiveTo);
+            pendingPaymentsCount = invoiceRepository.countByOwnerIdInAndStatusInAndDueDateLessThan(
+                    ownerScope, InvoiceStatus.OPEN_STATUSES, today);
+            pendingPaymentsAmount = invoiceRepository.sumBalanceDueByStatusAndDueDateBeforeForOwners(
+                    ownerScope, InvoiceStatus.OPEN_STATUSES, today);
             monthlyBilling = invoiceRepository.sumGrandTotalForOwnersBetween(ownerScope, effectiveFrom, effectiveTo);
-            outstanding = invoiceRepository.sumGrandTotalByStatusForOwners(ownerScope, InvoiceStatus.UNPAID);
+            outstanding = invoiceRepository.sumBalanceDueByStatusForOwners(ownerScope, InvoiceStatus.OPEN_STATUSES);
         }
 
         return new QuotationInvoiceSummaryResponse(totalQuotations, approvedQuotations, convertedToInvoice,

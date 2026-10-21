@@ -20,5 +20,6 @@ import java.util.UUID;
  * LeadSpecifications#createdBetween).
  */
 public record LeadFilter(LeadStatus status, UUID ownerId, UUID interestLevelId, String search,
-                          UUID stateId, UUID cityId, UUID productId, LocalDate dateFrom, LocalDate dateTo) {
+                          UUID stateId, UUID cityId, UUID productId, LocalDate dateFrom, LocalDate dateTo,
+                          UUID interestReasonId) {
 }

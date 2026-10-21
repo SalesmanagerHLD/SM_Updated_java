@@ -67,10 +67,12 @@ class QuotationPdfHtmlBuilder {
         }
         html.append("</div>");
 
+        boolean interState = quotation.getIgstTotal().signum() > 0;
         html.append("<table class=\"lines\"><thead><tr>")
                 .append("<th>Description</th><th>HSN/SAC</th><th class=\"num\">Qty</th>")
                 .append("<th class=\"num\">Unit Price</th><th class=\"num\">Discount %</th>")
-                .append("<th class=\"num\">CGST</th><th class=\"num\">SGST</th><th class=\"num\">Total</th>")
+                .append(interState ? "<th class=\"num\">IGST</th>" : "<th class=\"num\">CGST</th><th class=\"num\">SGST</th>")
+                .append("<th class=\"num\">Total</th>")
                 .append("</tr></thead><tbody>");
         for (QuotationLineItem line : lineItems) {
             html.append("<tr>")
@@ -79,8 +81,10 @@ class QuotationPdfHtmlBuilder {
                     .append("<td class=\"num\">").append(line.getQuantity()).append("</td>")
                     .append("<td class=\"num\">").append(line.getUnitPrice()).append("</td>")
                     .append("<td class=\"num\">").append(line.getDiscountPercent()).append("</td>")
-                    .append("<td class=\"num\">").append(line.getLineCgstAmount()).append("</td>")
-                    .append("<td class=\"num\">").append(line.getLineSgstAmount()).append("</td>")
+                    .append(interState
+                            ? "<td class=\"num\">" + line.getLineIgstAmount() + "</td>"
+                            : "<td class=\"num\">" + line.getLineCgstAmount() + "</td><td class=\"num\">"
+                                    + line.getLineSgstAmount() + "</td>")
                     .append("<td class=\"num\">").append(line.getLineTotal()).append("</td>")
                     .append("</tr>");
         }
@@ -90,8 +94,9 @@ class QuotationPdfHtmlBuilder {
                 .append("<div>Subtotal: ").append(quotation.getSubtotal()).append("</div>")
                 .append("<div>Discount: ").append(quotation.getDiscountTotal()).append("</div>")
                 .append("<div>Taxable Amount: ").append(quotation.getTaxableAmount()).append("</div>")
-                .append("<div>CGST: ").append(quotation.getCgstTotal()).append("</div>")
-                .append("<div>SGST: ").append(quotation.getSgstTotal()).append("</div>")
+                .append(interState
+                        ? "<div>IGST: " + quotation.getIgstTotal() + "</div>"
+                        : "<div>CGST: " + quotation.getCgstTotal() + "</div><div>SGST: " + quotation.getSgstTotal() + "</div>")
                 .append("<div class=\"grand-total\">Grand Total: ").append(quotation.getGrandTotal()).append("</div>")
                 .append("</div>");
 

@@ -96,7 +96,9 @@ public class MasterDataSeedService {
         // Codes MUST be exactly HOT/WARM/COLD - future business logic (e.g. Lost -> Interest
         // = Cold) keys off these exact codes, so labels are deliberately chosen so the
         // standard uppercase-snake-case derivation below produces exactly that.
-        seed(MasterType.INTEREST_LEVEL, "Hot", "Warm", "Cold");
+        Map<String, java.util.UUID> interestLevelIdsByCode =
+                seed(MasterType.INTEREST_LEVEL, "Hot", "Warm", "Cold");
+        seedInterestReasons(interestLevelIdsByCode);
 
         seed(MasterType.LEAD_SOURCE,
                 "Referral", "Inbound Web Form", "Trade Show", "Cold Outreach", "Walk-in",
@@ -107,6 +109,38 @@ public class MasterDataSeedService {
                 "Solar Inverter 3KVA", "Solar Inverter 5KVA", "Solar Inverter 10KVA",
                 "Solar Panel 330W", "Solar Panel 550W", "Battery Backup", "Installation Service",
                 "Annual Maintenance Contract", "Extended Warranty");
+    }
+
+    /**
+     * Starter "why is it Hot/Warm/Cold" reasons, each with parent_id pointing at its interest
+     * level. Only a starting set - admins add, rename or retire them under Masters. Labels must be
+     * unique across levels (codes are unique per type).
+     */
+    private void seedInterestReasons(Map<String, java.util.UUID> interestLevelIdsByCode) {
+        Map<String, String[]> reasonsByLevelCode = new java.util.LinkedHashMap<>();
+        reasonsByLevelCode.put("HOT", new String[] {
+                "Budget approved", "Urgent requirement", "Decision maker engaged", "Demo or quote requested"});
+        reasonsByLevelCode.put("WARM", new String[] {
+                "Evaluating options", "Waiting on budget", "Needs internal approval", "Comparing competitors"});
+        reasonsByLevelCode.put("COLD", new String[] {
+                "No current requirement", "Price is a concern", "Not the decision maker", "Long-term prospect"});
+        int sortOrder = 0;
+        for (Map.Entry<String, String[]> entry : reasonsByLevelCode.entrySet()) {
+            java.util.UUID levelId = interestLevelIdsByCode.get(entry.getKey());
+            if (levelId == null) {
+                throw new IllegalStateException("No seeded INTEREST_LEVEL row with code " + entry.getKey());
+            }
+            for (String label : entry.getValue()) {
+                masterDataRepository.save(MasterData.builder()
+                        .type(MasterType.INTEREST_REASON)
+                        .code(deriveCode(label))
+                        .label(label)
+                        .sortOrder(sortOrder++)
+                        .active(true)
+                        .parentId(levelId)
+                        .build());
+            }
+        }
     }
 
     /**

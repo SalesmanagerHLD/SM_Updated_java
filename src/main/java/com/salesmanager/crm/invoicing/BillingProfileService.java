@@ -3,6 +3,8 @@ package com.salesmanager.crm.invoicing;
 import com.salesmanager.crm.common.NotFoundException;
 import com.salesmanager.crm.invoicing.dto.BillingProfileResponse;
 import com.salesmanager.crm.invoicing.dto.BillingProfileUpdateRequest;
+import com.salesmanager.crm.masterdata.MasterDataService;
+import com.salesmanager.crm.masterdata.MasterType;
 import com.salesmanager.crm.security.CurrentUser;
 import com.salesmanager.crm.tenant.Organization;
 import com.salesmanager.crm.tenant.OrganizationRepository;
@@ -29,8 +31,11 @@ public class BillingProfileService {
 
     private final OrganizationRepository organizationRepository;
     private final CurrentUser currentUser;
+    private final MasterDataService masterDataService;
 
-    public BillingProfileService(OrganizationRepository organizationRepository, CurrentUser currentUser) {
+    public BillingProfileService(OrganizationRepository organizationRepository, CurrentUser currentUser,
+                                  MasterDataService masterDataService) {
+        this.masterDataService = masterDataService;
         this.organizationRepository = organizationRepository;
         this.currentUser = currentUser;
     }
@@ -40,9 +45,11 @@ public class BillingProfileService {
         return BillingProfileResponse.from(loadCurrentOrganization());
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = com.salesmanager.crm.masterdata.InvalidReferenceException.class)
     public BillingProfileResponse updateBillingProfile(BillingProfileUpdateRequest request) {
+        masterDataService.validateReference(request.billingStateId(), MasterType.STATE, "billingStateId");
         Organization organization = loadCurrentOrganization();
+        organization.setBillingStateId(request.billingStateId());
         organization.setBillingAddress(request.billingAddress());
         organization.setBillingGstin(request.billingGstin());
         organization.setBillingPhone(request.billingPhone());
